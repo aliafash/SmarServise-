@@ -1,0 +1,6 @@
+{
+  "name": "دليل الخدمات",
+  "description": "دليل الخدمات الشامل والذكي للمهنيين ومقدمي الخدمات مع مزامنة لحظية وجدولة وبوابة للمالك",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
