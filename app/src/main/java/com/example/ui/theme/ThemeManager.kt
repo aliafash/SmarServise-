@@ -3,74 +3,84 @@ package com.example.ui.theme
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
 import com.example.data.AppConfig
 
 object ThemeManager {
 
-    // 1. Cosmic Slate (كوزميك سيلفر)
-    val SlateBackground = Color(0xFF0F172A)
-    val SlateSurface = Color(0xFF1E293B)
-    val SlatePrimary = Color(0xFFE2E8F0)
-    val SlateAccent = Color(0xFF38BDF8)
-    val SlateSecondary = Color(0xFF64748B)
+    // Themes
+    private val SilverColorScheme = darkColorScheme(
+        primary = Color(0xFFC0C0C0), // Silver
+        secondary = Color(0xFFE2E8F0), // Slate Light
+        tertiary = Color(0xFF708090), // Slate Blue
+        background = Color(0xFF0F172A), // Cosmic Dark Slate
+        surface = Color(0xFF1E293B),
+        onPrimary = Color(0xFF111827),
+        onSecondary = Color(0xFF1E293B),
+        onBackground = Color(0xFFF1F5F9),
+        onSurface = Color(0xFFF1F5F9)
+    )
 
-    // 2. Charcoal Gold (الذهبي الفاخر)
-    val CharcoalBackground = Color(0xFF101011)
-    val CharcoalSurface = Color(0xFF1B1B1C)
-    val CharcoalPrimary = Color(0xFFD4AF37)
-    val CharcoalAccent = Color(0xFFF3E5AB)
-    val CharcoalSecondary = Color(0xFF4A4A4B)
+    private val GoldColorScheme = darkColorScheme(
+        primary = Color(0xFFD4AF37), // Metallic Gold
+        secondary = Color(0xFFF3E5AB), // Mellow Gold/Amber
+        tertiary = Color(0xFFAA7C11),
+        background = Color(0xFF121212), // Dark Obsidian
+        surface = Color(0xFF1A1A1A),
+        onPrimary = Color(0xFF000000),
+        onSecondary = Color(0xFF000000),
+        onBackground = Color(0xFFFFFDD0),
+        onSurface = Color(0xFFFFFDD0)
+    )
 
-    // 3. Royal Emerald (الزمردي الراقي)
-    val EmeraldBackground = Color(0xFF061A13)
-    val EmeraldSurface = Color(0xFF0D2D21)
-    val EmeraldPrimary = Color(0xFF10B981)
-    val EmeraldAccent = Color(0xFF6EE7B7)
-    val EmeraldSecondary = Color(0xFF0F766E)
-
-    // Font Colors
-    val BrightWhite = Color(0xFFFFFFFF)
-    val LightGold = Color(0xFFFFF1C5)
-    val VibrantSilver = Color(0xFFD1D5DB)
+    private val EmeraldColorScheme = darkColorScheme(
+        primary = Color(0xFF50C878), // Emerald Green
+        secondary = Color(0xFF98FF98),
+        tertiary = Color(0xFF046307),
+        background = Color(0xFF06140A), // Extremely Dark Deep Forest
+        surface = Color(0xFF0E2214),
+        onPrimary = Color(0xFF000000),
+        onSecondary = Color(0xFF000000),
+        onBackground = Color(0xFFE0F2E9),
+        onSurface = Color(0xFFE0F2E9)
+    )
 
     fun getColorScheme(config: AppConfig?): ColorScheme {
-        val theme = config?.themeName ?: "COSMIC_SLATE"
-        return when (theme) {
-            "CHARCOAL_GOLD" -> darkColorScheme(
-                primary = CharcoalPrimary,
-                secondary = CharcoalAccent,
-                background = CharcoalBackground,
-                surface = CharcoalSurface,
-                onPrimary = Color.Black,
-                onBackground = Color.White,
-                onSurface = Color.White
-            )
-            "ROYAL_EMERALD" -> darkColorScheme(
-                primary = EmeraldPrimary,
-                secondary = EmeraldAccent,
-                background = EmeraldBackground,
-                surface = EmeraldSurface,
-                onPrimary = Color.Black,
-                onBackground = Color.White,
-                onSurface = Color.White
-            )
-            else -> darkColorScheme( // COSMIC_SLATE (Default)
-                primary = SlatePrimary,
-                secondary = SlateAccent,
-                background = SlateBackground,
-                surface = SlateSurface,
-                onPrimary = Color.Black,
-                onBackground = Color.White,
-                onSurface = Color.White
-            )
+        return when (config?.colorThemeId) {
+            "silver" -> SilverColorScheme
+            "gold" -> GoldColorScheme
+            "emerald" -> EmeraldColorScheme
+            else -> SilverColorScheme
         }
     }
 
     fun getFontColor(config: AppConfig?): Color {
-        return when (config?.fontColorName ?: "BRIGHT_WHITE") {
-            "LIGHT_GOLD" -> LightGold
-            "VIBRANT_SILVER" -> VibrantSilver
-            else -> BrightWhite
+        return try {
+            val hex = config?.fontColor ?: "#FFFFFF"
+            Color(android.graphics.Color.parseColor(hex))
+        } catch (e: Exception) {
+            Color.White
         }
+    }
+
+    fun getFontFamily(config: AppConfig?): FontFamily {
+        return when (config?.fontTypeFace) {
+            "monospace" -> FontFamily.Monospace
+            else -> FontFamily.Default
+        }
+    }
+
+    fun getFontWeight(config: AppConfig?): FontWeight {
+        return when (config?.fontTypeFace) {
+            "bold" -> FontWeight.Bold
+            else -> FontWeight.Bold // User wanted prominent thick font weights ("خط عريض")
+        }
+    }
+
+    fun getFontScale(config: AppConfig?): androidx.compose.ui.unit.TextUnit {
+        val baseOffset = config?.fontSizeOffset ?: 0
+        return (14 + baseOffset).sp
     }
 }

@@ -1,14 +1,14 @@
 package com.example.ui
 
-import android.app.Activity
 import android.content.Context
 import android.widget.Toast
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.data.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import java.io.File
+import kotlin.math.*
 
 enum class AppScreen {
     HOME,
@@ -21,393 +21,550 @@ enum class AppScreen {
 
 class AppViewModel(private val repository: AppRepository) : ViewModel() {
 
-    // Observables from repo
+    // Persistent State store via SharedPreferences
+    private val sharedPrefs by lazy {
+        repository.allProvidersRaw.firstOrNull() // ensure initialized
+        // Use preferences
+        repository.categories // trivial reference to warm up DAO
+    }
+
+    // Navigation and selection tags
+    val currentScreen = MutableStateFlow(AppScreen.HOME)
+    val selectedProviderId = MutableStateFlow<String?>(null)
+
+    // Advanced search filter states
+    val searchQuery = MutableStateFlow("")
+    val searchPhoneQuery = MutableStateFlow("")
+    val searchNameQuery = MutableStateFlow("")
+    val selectedCategory = MutableStateFlow<Category?>(null)
+    val selectedCity = MutableStateFlow<String?>(null)
+
+    // Radius search
+    val radiusSearchKm = MutableStateFlow(10f) // default 10km range slider
+    val isRadiusFilterEnabled = MutableStateFlow(false)
+    val userGPSCoordinates = MutableStateFlow("15.3694,44.1910") // Default Sana'a coordinates center
+
+    // Flows connected to database
     val categories: StateFlow<List<Category>> = repository.categories
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val serviceProviders: StateFlow<List<ServiceProvider>> = repository.serviceProviders
+    val serviceProviders: StateFlow<List<ServiceProvider>> = repository.activeProviders
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val pendingProviders: StateFlow<List<PendingProvider>> = repository.pendingProviders
+    val allProvidersRaw: StateFlow<List<ServiceProvider>> = repository.allProvidersRaw
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val reviews: StateFlow<List<Review>> = repository.reviews
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-
-    val chats: StateFlow<List<ChatMessage>> = repository.chats
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-
-    val reports: StateFlow<List<Report>> = repository.reports
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-
-    val loyaltyPoints: StateFlow<List<LoyaltyPoint>> = repository.loyaltyPoints
+    val pendingRegistrations: StateFlow<List<PendingRegistration>> = repository.pendingRegistrations
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val appConfig: StateFlow<AppConfig?> = repository.appConfig
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
-    val adBanners: StateFlow<List<AdBanner>> = repository.adBanners
+    val reports: StateFlow<List<Report>> = repository.reports
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val syncStatus: StateFlow<String> = repository.syncStatus
+    val adBanners: StateFlow<List<AdBanner>> = repository.activeBanners
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // Navigation and screen stack
-    private val _currentScreen = MutableStateFlow(AppScreen.HOME)
-    val currentScreen: StateFlow<AppScreen> = _currentScreen
+    val allBannersRaw: StateFlow<List<AdBanner>> = repository.allBannersRaw
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    private val _selectedProviderId = MutableStateFlow<String?>(null)
-    val selectedProviderId: StateFlow<String?> = _selectedProviderId
+    val subscriptionRequests: StateFlow<List<SubscriptionRequest>> = repository.subscriptionRequests
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    private val screenStack = mutableListOf(AppScreen.HOME)
+    val chats: StateFlow<List<ChatMessage>> = repository.chatsFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // Back door states
-    private val _backdoorClickCount = MutableStateFlow(0)
-    private val backdoorClickCount: StateFlow<Int> = _backdoorClickCount
+    val whitelistedDevices: StateFlow<List<WhitelistedDevice>> = repository.whitelistedDevices
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // Search and Filters
-    private val _searchQuery = MutableStateFlow("")
-    val searchQuery: StateFlow<String> = _searchQuery
+    val serviceTickets: StateFlow<List<ServiceRequestTicket>> = repository.serviceTickets
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    private val _selectedCategory = MutableStateFlow<Category?>(null)
-    val selectedCategory: StateFlow<Category?> = _selectedCategory
+    val systemAlerts: StateFlow<List<SystemAlert>> = repository.systemAlerts
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    private val _selectedCity = MutableStateFlow<String?>(null)
-    val selectedCity: StateFlow<String?> = _selectedCity
+    // Backdoor secret count & Unlock
+    private var backDoorClickCount = 0
+    val isBackdoorUnlocked = MutableStateFlow(false)
+    val isBackdoorRemembered = MutableStateFlow(false)
 
-    private val _searchPhoneQuery = MutableStateFlow("")
-    val searchPhoneQuery: StateFlow<String> = _searchPhoneQuery
+    // Admin login status
+    val isAdminLoggedIn = MutableStateFlow(false)
+    val isRememberAdminLoginEnabled = MutableStateFlow(false)
 
-    private val _searchNameQuery = MutableStateFlow("")
-    val searchNameQuery: StateFlow<String> = _searchNameQuery
+    // Device identification (simulated)
+    val simulatedDeviceId = "sandbox_dev_id"
 
-    private val _isVoiceSearching = MutableStateFlow(false)
-    val isVoiceSearching: StateFlow<Boolean> = _isVoiceSearching
+    // Sync activity log ticker
+    val syncStatus = MutableStateFlow("مزامنة فورية نشطة وموثقة ☑️")
 
-    // Current user context (mock)
-    val currentUserId = "user_device_736462"
-    val currentUserPoints: StateFlow<Int> = loyaltyPoints.map { list ->
-        list.filter { it.userId == currentUserId }.sumOf { it.points }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+    init {
+        // Prepopulate database with default items
+        viewModelScope.launch {
+            repository.tryPrepopulateData()
+        }
+    }
 
-    // Back Door & Login variables
-    val secureBackdoorPwdMock = "maher--736462"
-    var isBackdoorUnlocked = MutableStateFlow(false)
-    var isAdminLoggedIn = MutableStateFlow(false)
+    // Initialize remembers inside screens using android context on first launch
+    fun loadRememberedPreferences(context: Context) {
+        val prefs = context.getSharedPreferences("yemen_dir_prefs", Context.MODE_PRIVATE)
+        
+        // Load admin status if remember login checkmark was set before
+        val savedAdminLoginStatus = prefs.getBoolean("remember_admin_login", false)
+        if (savedAdminLoginStatus) {
+            isAdminLoggedIn.value = true
+            isRememberAdminLoginEnabled.value = true
+        }
 
-    // Language switcher State (Default Arabic)
-    private val _currentLang = MutableStateFlow("AR")
-    val currentLang: StateFlow<String> = _currentLang
+        // Load backdoor password if remembered
+        val savedBackdoorUnlocked = prefs.getBoolean("remember_backdoor_unlocked", false)
+        if (savedBackdoorUnlocked) {
+            isBackdoorUnlocked.value = true
+            isBackdoorRemembered.value = true
+        }
+    }
 
-    // Last backpress timestamp
+    // Persist Login options
+    fun setRememberAdminLogin(enabled: Boolean, context: Context) {
+        isRememberAdminLoginEnabled.value = enabled
+        val prefs = context.getSharedPreferences("yemen_dir_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putBoolean("remember_admin_login", enabled).apply()
+        if (!enabled) {
+            prefs.edit().putBoolean("remember_admin_login", false).apply()
+        }
+    }
+
+    // Toggle Backdoor Remember
+    fun setRememberBackdoorPass(enabled: Boolean, context: Context) {
+        isBackdoorRemembered.value = enabled
+        val prefs = context.getSharedPreferences("yemen_dir_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putBoolean("remember_backdoor_unlocked", enabled).apply()
+        if (!enabled) {
+            prefs.edit().putBoolean("remember_backdoor_unlocked", false).apply()
+        }
+    }
+
+    // Double tab back pressed behavior for exit / navigation
     private var lastBackPressTime = 0L
 
-    fun changeLanguage(lang: String) {
-        _currentLang.value = lang
-    }
-
-    // Top Bar Custom Ordering Configuration State
-    // String contains comma separated top bar icons keys: "HOME,LOGIN,REGISTER,LANG,REFRESH"
-    private val _topBarOrder = MutableStateFlow(listOf("HOME", "LOGIN", "REGISTER", "LANG", "REFRESH"))
-    val topBarOrder: StateFlow<List<String>> = _topBarOrder
-
-    fun updateTopBarOrder(newOrder: List<String>) {
-        _topBarOrder.value = newOrder
-    }
-
-    // Navigation Action
-    fun navigateTo(screen: AppScreen, providerId: String? = null) {
-        if (providerId != null) {
-            _selectedProviderId.value = providerId
-        }
-        _currentScreen.value = screen
-        if (screenStack.lastOrNull() != screen) {
-            screenStack.add(screen)
-        }
-    }
-
-    fun handleBackPress(activity: Activity) {
-        if (screenStack.size > 1) {
-            screenStack.removeAt(screenStack.size - 1)
-            val prevScreen = screenStack.lastOrNull() ?: AppScreen.HOME
-            _currentScreen.value = prevScreen
+    fun handleBackPress(context: Context) {
+        if (currentScreen.value != AppScreen.HOME) {
+            navigateTo(AppScreen.HOME)
         } else {
-            // We are on HOME. Exit on consecutive clicks within 2 seconds
-            val now = System.currentTimeMillis()
-            if (now - lastBackPressTime < 2000) {
-                activity.finish()
+            val currentTime = System.currentTimeMillis()
+            if (currentTime - lastBackPressTime < 1800) {
+                // Exit app
+                (context as? android.app.Activity)?.finish()
             } else {
-                lastBackPressTime = now
-                Toast.makeText(activity, "اضغط مرة أخرى للخروج من التطبيق", Toast.LENGTH_SHORT).show()
+                lastBackPressTime = currentTime
+                Toast.makeText(context, "إضغط مرة أخرى للخروج من التطبيق", Toast.LENGTH_SHORT).show()
             }
         }
     }
 
-    // Secret Portal Activation Handler
+    // Navigation controller routing
+    fun navigateTo(screen: AppScreen, providerId: String? = null) {
+        selectedProviderId.value = providerId
+        currentScreen.value = screen
+    }
+
+    // Back door title secret counters
     fun registerAppTitleClick() {
-        _backdoorClickCount.value = _backdoorClickCount.value + 1
-        if (_backdoorClickCount.value >= 5) {
-            _backdoorClickCount.value = 0
-            // Unlock Door triggers in the view Layer
-        }
+        backDoorClickCount++
     }
 
     fun resetBackdoorCounter() {
-        _backdoorClickCount.value = 0
+        backDoorClickCount = 0
     }
 
-    fun unlockBackdoor(password: String): Boolean {
-        if (password == secureBackdoorPwdMock) {
+    fun unlockBackdoor(password: String, context: Context): Boolean {
+        // Simple sovereign override code check
+        if (password == "7777" || password == "الماهر") {
             isBackdoorUnlocked.value = true
-            isAdminLoggedIn.value = true
             navigateTo(AppScreen.BACKDOOR_DASHBOARD)
+            if (isBackdoorRemembered.value) {
+                val prefs = context.getSharedPreferences("yemen_dir_prefs", Context.MODE_PRIVATE)
+                prefs.edit().putBoolean("remember_backdoor_unlocked", true).apply()
+            }
             return true
+        }
+        
+        // Log unauthorized attempt warning to Admin Log
+        viewModelScope.launch {
+            repository.registerAlert(
+                SystemAlert(
+                    id = "alert_unauth_" + System.currentTimeMillis(),
+                    title = "⚠️ محاولة ولوج للبوابة الخلفية",
+                    message = "تم رصد محاولة دخول خاطئة للبوابة الخلفية للمالك برمز مجهول: '$password'",
+                    type = "UNAUTHORIZED_LOGIN"
+                )
+            )
         }
         return false
     }
 
-    fun performAdminLogin(user: String, pass: String, config: AppConfig?): Boolean {
-        val configuredPass = config?.adminPassword ?: "maher736462"
-        if (user == "WAM2026" && pass == configuredPass) {
-            isAdminLoggedIn.value = true
-            navigateTo(AppScreen.ADMIN_DASHBOARD)
-            return true
-        }
-        return false
-    }
-
-    fun logout() {
-        isAdminLoggedIn.value = false
+    fun lockBackdoor(context: Context) {
         isBackdoorUnlocked.value = false
+        val prefs = context.getSharedPreferences("yemen_dir_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putBoolean("remember_backdoor_unlocked", false).apply()
         navigateTo(AppScreen.HOME)
     }
 
-    // Filters resets
-    fun setQuery(q: String) { _searchQuery.value = q }
-    fun setPhoneQuery(q: String) { _searchPhoneQuery.value = q }
-    fun setNameQuery(q: String) { _searchNameQuery.value = q }
-    fun selectCategory(cat: Category?) { _selectedCategory.value = cat }
-    fun selectCity(city: String?) { _selectedCity.value = city }
-
-    // Start Voice Search Simulation
-    fun triggerVoiceRecognition(context: Context) {
-        _isVoiceSearching.value = true
+    // Language selector
+    fun changeSystemTheme(themeId: String) {
         viewModelScope.launch {
-            kotlinx.coroutines.delay(2000)
-            val keywords = listOf("كهربائي", "طبيب", "معين", "سباك", "صنعاء", "مدرس رياضيات", "سائق", "ماهر")
-            val randomKey = keywords.random()
-            setQuery(randomKey)
-            _isVoiceSearching.value = false
-            Toast.makeText(context, "البحث الصوتي الذكي حدد: $randomKey", Toast.LENGTH_SHORT).show()
+            val current = appConfig.value ?: AppConfig()
+            repository.updateAppConfig(current.copy(colorThemeId = themeId))
         }
     }
 
-    // Actions
-    fun submitProfessionalRegistration(
-        name: String,
-        phone: String,
-        catId: String,
-        address: String,
-        district: String,
-        gps: String,
-        profileImg: String,
-        idCardImg: String?,
-        context: Context
+    // Admin login with Device Whitelist checking
+    fun attemptAdminLogin(password: String, context: Context): Boolean {
+        if (password == "admin" || password == "967777") {
+            // Check whitelist
+            val devices = whitelistedDevices.value
+            val isWhitelisted = devices.isEmpty() || devices.any { it.deviceId == simulatedDeviceId }
+
+            if (isWhitelisted) {
+                isAdminLoggedIn.value = true
+                navigateTo(AppScreen.ADMIN_DASHBOARD)
+                
+                // If remember checkmark is checked
+                if (isRememberAdminLoginEnabled.value) {
+                    val prefs = context.getSharedPreferences("yemen_dir_prefs", Context.MODE_PRIVATE)
+                    prefs.edit().putBoolean("remember_admin_login", true).apply()
+                }
+                return true
+            } else {
+                Toast.makeText(context, "عذراً! جهاز غير مصرح له في القائمة البيضاء للأمان.", Toast.LENGTH_LONG).show()
+                viewModelScope.launch {
+                    repository.registerAlert(
+                        SystemAlert(
+                            id = "alert_dev_unauth_" + System.currentTimeMillis(),
+                            title = "🔒 محاولة دخول من جهاز غير مصرح به",
+                            message = "تم حظر محاولة دخول للوحة التحكم بمنتج مصدق من جهاز غير معرف ID: '$simulatedDeviceId'.",
+                            type = "UNAUTHORIZED_LOGIN"
+                        )
+                    )
+                }
+                return false
+            }
+        }
+        return false
+    }
+
+    fun adminLogout(context: Context) {
+        isAdminLoggedIn.value = false
+        isRememberAdminLoginEnabled.value = false
+        val prefs = context.getSharedPreferences("yemen_dir_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putBoolean("remember_admin_login", false).apply()
+        navigateTo(AppScreen.HOME)
+    }
+
+    // Advanced search options filters updates
+    fun setQuery(q: String) { searchQuery.value = q }
+    fun setPhoneQuery(p: String) { searchPhoneQuery.value = p }
+    fun setNameQuery(n: String) { searchNameQuery.value = n }
+    fun selectCategory(c: Category?) { selectedCategory.value = c }
+    fun selectCity(city: String?) { selectedCity.value = city }
+
+    // Floating Button Config Modifiers (Live Sync to Room UI)
+    fun updateFloatingWidgetsSettings(
+        assistantVisible: Boolean, assistantSize: Int,
+        infoVisible: Boolean, infoSize: Int,
+        chatVisible: Boolean, chatSize: Int,
+        chatVertical: Int, chatHorizontal: Int
     ) {
         viewModelScope.launch {
-            val pending = PendingProvider(
-                id = "pending_" + System.currentTimeMillis(),
-                name = name,
-                phone = phone,
-                categoryId = catId,
-                subCategoryId = null,
-                address = address,
-                district = district,
-                locationGPS = gps,
-                profileImage = profileImg,
-                idCardImage = idCardImg,
-                status = "pending"
+            val current = appConfig.value ?: AppConfig()
+            repository.updateAppConfig(
+                current.copy(
+                    smartAssistantIconVisible = assistantVisible,
+                    smartAssistantIconSize = assistantSize,
+                    appInfoIconVisible = infoVisible,
+                    appInfoIconSize = infoSize,
+                    adminChatIconVisible = chatVisible,
+                    adminChatIconSize = chatSize,
+                    adminChatBottomOffset = chatHorizontal,
+                    adminChatStartOffset = chatVertical
+                )
             )
-            repository.submitPendingProvider(pending)
-            repository.addLoyaltyPoints(currentUserId, 15, "تقديم طلب انضمام مهني جديد")
-            Toast.makeText(context, "تم إرسال طلبك للتدقيق والمراجعة الفورية بنجاح!", Toast.LENGTH_LONG).show()
-            navigateTo(AppScreen.HOME)
         }
     }
 
-    fun submitDirectProvider(
-        name: String,
-        phone: String,
-        catId: String,
-        address: String,
-        district: String,
-        profileImg: String
-    ) {
+    // Toggle Maintenance Mode
+    fun setMaintenanceMode(enabled: Boolean) {
         viewModelScope.launch {
-            val approved = ServiceProvider(
-                id = "prov_" + System.currentTimeMillis(),
-                name = name,
-                phone = phone,
-                categoryId = catId,
-                subCategoryId = null,
-                address = address,
-                district = district,
-                locationGPS = "15.3694,44.1910",
-                profileImage = profileImg,
-                idCardImage = null,
-                isApproved = true,
-                rating = 4.5f,
-                reviewCount = 0
-            )
-            repository.addServiceProvider(approved)
+            val current = appConfig.value ?: AppConfig()
+            repository.updateAppConfig(current.copy(isMaintenanceMode = enabled))
         }
     }
 
-    fun editAppConfig(config: AppConfig) {
-        viewModelScope.launch {
-            repository.updateAppConfig(config)
-        }
-    }
-
-    fun triggerRefresh(context: Context) {
-        viewModelScope.launch {
-            Toast.makeText(context, "جاري تحديث واسترجاع البيانات اللحظية 🔄", Toast.LENGTH_SHORT).show()
-            repository.backupDatabaseToStorage() // simple silent preserve sync
-        }
-    }
-
-    // Add Review & score loyalty points
-    fun addReview(providerId: String, rating: Int, comment: String, name: String) {
-        viewModelScope.launch {
-            val review = Review(
-                id = "rev_" + System.currentTimeMillis(),
-                providerId = providerId,
-                rating = rating,
-                comment = comment,
-                reviewerName = name
-            )
-            repository.submitReview(review)
-            repository.addLoyaltyPoints(currentUserId, 10, "تقييم مقدم خدمة ($rating نجوم)")
-        }
-    }
-
-    // Generate Report
-    fun fileReport(providerId: String, providerName: String, reporterName: String, reason: String, context: Context) {
-        viewModelScope.launch {
-            val rep = Report(
-                id = "rep_" + System.currentTimeMillis(),
-                providerId = providerId,
-                providerName = providerName,
-                reporterName = reporterName,
-                reason = reason,
-                status = "pending"
-            )
-            repository.submitReport(rep)
-            Toast.makeText(context, "تم إرسال البلاغ وسياراجعه المشرفون في الحال", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    fun resolveReport(id: String) {
-        viewModelScope.launch {
-            repository.deleteReport(id)
-        }
-    }
-
-    // Add Banner
-    fun publishBanner(banner: AdBanner) {
-        viewModelScope.launch {
-            repository.addBanner(banner)
-        }
-    }
-
-    fun deleteBanner(id: String) {
-        viewModelScope.launch {
-            repository.deleteBanner(id)
-        }
-    }
-
-    fun approveRequest(id: String) {
-        viewModelScope.launch {
-            repository.approvePendingProvider(id)
-        }
-    }
-
-    fun rejectRequest(id: String, reason: String) {
-        viewModelScope.launch {
-            repository.rejectPendingProvider(id, reason)
-        }
-    }
-
-    fun toggleRecommendProvider(provider: ServiceProvider) {
-        viewModelScope.launch {
-            repository.addServiceProvider(provider.copy(isRecommended = !provider.isRecommended))
-        }
-    }
-
-    fun togglePinProvider(provider: ServiceProvider) {
-        viewModelScope.launch {
-            repository.addServiceProvider(provider.copy(isPinned = !provider.isPinned))
-        }
-    }
-
-    fun toggleVerifyProvider(provider: ServiceProvider) {
-        viewModelScope.launch {
-            repository.addServiceProvider(provider.copy(isVerified = !provider.isVerified))
-        }
-    }
-
-    fun togglePremiumSubscription(provider: ServiceProvider) {
-        viewModelScope.launch {
-            repository.addServiceProvider(provider.copy(hasPremiumBadge = !provider.hasPremiumBadge))
-        }
-    }
-
-    // Messenger Chats
-    fun sendMessage(providerId: String, senderName: String, text: String) {
-        viewModelScope.launch {
-            val msg = ChatMessage(
-                id = "chat_" + System.currentTimeMillis(),
-                providerId = providerId,
-                senderName = senderName,
-                message = text
-            )
-            repository.sendChatMessage(msg)
-        }
-    }
-
-    fun triggerDatabaseBackup(context: Context) {
-        viewModelScope.launch {
-            val res = repository.backupDatabaseToStorage()
-            Toast.makeText(context, res, Toast.LENGTH_LONG).show()
-        }
-    }
-
-    fun triggerCSVReportsExport(context: Context) {
-        viewModelScope.launch {
-            val res = repository.exportReportsToCSV()
-            Toast.makeText(context, res, Toast.LENGTH_LONG).show()
-        }
-    }
-
+    // Custom Category Add
     fun addCategory(category: Category) {
         viewModelScope.launch {
             repository.addCategory(category)
         }
     }
 
-    fun triggerScheduledTasks(context: Context) {
+    fun deleteCategory(id: String) {
         viewModelScope.launch {
-            repository.clearOldChats(System.currentTimeMillis() - 7 * 86400000L) // clear older than 7 days
-            Toast.makeText(context, "تمت جدولة وتنظيف المحادثات وسجل الذاكرة المؤقتة بنجاح!", Toast.LENGTH_SHORT).show()
+            repository.deleteCategory(id)
         }
     }
-}
 
-class AppViewModelFactory(private val repository: AppRepository) : ViewModelProvider.Factory {
-    override fun <T : ViewModel> create(modelClass: Class<T>): T {
-        if (modelClass.isAssignableFrom(AppViewModel::class.java)) {
-            @Suppress("UNCHECKED_CAST")
-            return AppViewModel(repository) as T
+    // Service Provider registration
+    fun submitNewProfessionalRegistration(
+        name: String,
+        phone: String,
+        categoryId: String,
+        subCategoryId: String,
+        address: String,
+        district: String,
+        gps: String,
+        profileImage: String,
+        idCardImage: String?
+    ) {
+        viewModelScope.launch {
+            val request = PendingRegistration(
+                id = "reg_" + System.currentTimeMillis(),
+                name = name,
+                phone = phone,
+                categoryId = categoryId,
+                subCategoryId = subCategoryId,
+                address = address,
+                district = district,
+                locationGPS = if (gps.isBlank()) "15.3694,44.1910" else gps,
+                profileImage = if (profileImage.isBlank()) "https://images.unsplash.com/photo-1521587760476-6c12a4b040da?w=150" else profileImage,
+                idCardImage = idCardImage
+            )
+            repository.submitProfessionalRegistration(request)
         }
-        throw IllegalArgumentException("Unknown ViewModel class")
+    }
+
+    // Approve applicant
+    fun approveRegistrationRequest(pending: PendingRegistration) {
+        viewModelScope.launch {
+            val provider = ServiceProvider(
+                id = "p_" + System.currentTimeMillis(),
+                name = pending.name,
+                phone = pending.phone,
+                categoryId = pending.categoryId,
+                subCategoryId = pending.subCategoryId,
+                address = pending.address,
+                district = pending.district,
+                locationGPS = pending.locationGPS,
+                profileImage = pending.profileImage,
+                idCardImage = pending.idCardImage,
+                isApproved = true,
+                isVerified = false
+            )
+            repository.approveRegistration(pending.id, provider)
+        }
+    }
+
+    fun rejectRegistrationRequest(id: String) {
+        viewModelScope.launch {
+            repository.rejectRegistration(id)
+        }
+    }
+
+    // Report Provider Complaint logic
+    fun fileReport(providerId: String, providerName: String, phone: String, reason: String, desc: String) {
+        viewModelScope.launch {
+            val report = Report(
+                id = "rep_" + System.currentTimeMillis(),
+                providerId = providerId,
+                providerName = providerName,
+                reporterPhone = phone,
+                reason = reason,
+                description = desc
+            )
+            repository.submitReport(report)
+        }
+    }
+
+    // Monthly Premium Subscriptions submit
+    fun requestPremiumSubscription(providerId: String, name: String, phone: String, billReceipt: String) {
+        viewModelScope.launch {
+            val request = SubscriptionRequest(
+                id = "sub_" + System.currentTimeMillis(),
+                providerId = providerId,
+                providerName = name,
+                phoneNumber = phone,
+                transactionProof = billReceipt
+            )
+            repository.submitSubscription(request)
+        }
+    }
+
+    // Sovereign admin actions on accounts
+    fun toggleBadgeVerification(providerId: String, isVerified: Boolean) {
+        viewModelScope.launch {
+            repository.toggleVerification(providerId, isVerified)
+        }
+    }
+
+    fun toggleSovereignPremiumHighlight(providerId: String, isPremium: Boolean) {
+        viewModelScope.launch {
+            repository.togglePremium(providerId, isPremium)
+        }
+    }
+
+    fun deleteProvider(providerId: String) {
+        viewModelScope.launch {
+            repository.deleteProvider(providerId)
+        }
+    }
+
+    // Blacklist/un-blacklist specific users
+    fun toggleBlacklistAction(id: String, isBanned: Boolean) {
+        viewModelScope.launch {
+            repository.toggleBlacklist(id, isBanned)
+        }
+    }
+
+    // Whitelisted Device Management
+    fun addDeviceToWhitelist(deviceId: String, label: String) {
+        viewModelScope.launch {
+            repository.addWhitelistedDevice(WhitelistedDevice(deviceId, label))
+        }
+    }
+
+    fun removeDeviceFromWhitelist(deviceId: String) {
+        viewModelScope.launch {
+            repository.deleteWhitelistedDevice(deviceId)
+        }
+    }
+
+    // Dynamic Top Promotion Ad Banners setup
+    fun createAdBanner(imageUrl: String, redirectUrl: String, text: String, bannerType: String, sizeType: String, duration: Int) {
+        viewModelScope.launch {
+            val banner = AdBanner(
+                id = "banner_" + System.currentTimeMillis(),
+                imageUrl = if (imageUrl.isBlank()) "https://images.unsplash.com/photo-1542744094-3a31f103e35f?w=620" else imageUrl,
+                redirectUrl = redirectUrl,
+                bannerText = text,
+                bannerType = bannerType,
+                sizeType = sizeType,
+                durationSeconds = duration,
+                isActive = true
+            )
+            repository.addBanner(banner)
+        }
+    }
+
+    fun removeAdBanner(id: String) {
+        viewModelScope.launch {
+            repository.deleteBanner(id)
+        }
+    }
+
+    // Synchronized messenger system
+    fun sendLiveChatMessage(providerId: String, name: String, text: String, isVisitor: Boolean) {
+        viewModelScope.launch {
+            val msg = ChatMessage(
+                id = "msg_" + System.currentTimeMillis(),
+                providerId = providerId,
+                senderName = name,
+                text = text,
+                isFromVisitor = isVisitor
+            )
+            repository.sendLiveChatMessage(msg)
+        }
+    }
+
+    fun clearChatLogs() {
+        viewModelScope.launch {
+            repository.clearAllChats()
+        }
+    }
+
+    // Booking actions log for User Dashboard
+    fun logUserBookingAction(providerId: String, name: String, phone: String, category: String, notes: String) {
+        viewModelScope.launch {
+            val ticket = ServiceRequestTicket(
+                id = "ticket_" + System.currentTimeMillis(),
+                providerId = providerId,
+                providerName = name,
+                providerPhone = phone,
+                requestedCategory = category,
+                status = "تم الاتصال", // "تم الاتصال", "في الانتظار", "مكتمل"
+                notes = notes
+            )
+            repository.addServiceRequestTicket(ticket)
+        }
+    }
+
+    fun clearServiceRequestLogs(id: String) {
+        viewModelScope.launch {
+            repository.deleteServiceRequestTicket(id)
+        }
+    }
+
+    // Backup operation actions
+    fun backupDataNow(folder: String, context: Context) {
+        viewModelScope.launch {
+            val backupFile = repository.exportDatabaseToStorage(folder)
+            if (backupFile != null) {
+                Toast.makeText(context, "تم حفظ النسخة بنجاح في: ${backupFile.absolutePath}", Toast.LENGTH_LONG).show()
+                repository.registerAlert(
+                    SystemAlert(
+                        id = "alert_bk_" + System.currentTimeMillis(),
+                        title = "💾 نجاح النسخ الاحتياطي لقاعدة البيانات",
+                        message = "تم ترحيل البيانات بنجاح إلى ملف خارجي: ${backupFile.name}",
+                        type = "SUBSCRIPTION"
+                    )
+                )
+            } else {
+                Toast.makeText(context, "عائد نسخ احتياطي فاشل! يرجى منح الأذونات اللازمة.", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    fun restoreDataNow(backupPath: String, context: Context) {
+        viewModelScope.launch {
+            val file = File(backupPath)
+            if (file.exists() && repository.restoreDatabaseFromBackup(file)) {
+                Toast.makeText(context, "تم استئناف البيانات والنسخة الاحتياطية بنجاح!", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(context, "فشل الاستعادة! المسار غير صحيح أو الملف غير متطابق.", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    fun dismissAllSystemAlerts() {
+        viewModelScope.launch {
+            repository.clearSystemAlerts()
+        }
+    }
+
+    // GPS Math: Radius Search Distance Calculation via Haversine
+    fun calculateDistanceKm(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+        val r = 6371.0 // Earth radius in km
+        val dLat = Math.toRadians(lat2 - lat1)
+        val dLon = Math.toRadians(lon2 - lon1)
+        val a = sin(dLat / 2).pow(2.0) + cos(Math.toRadians(lat1)) * cos(Math.toRadians(lat2)) * sin(dLon / 2).pow(2.0)
+        val c = 2 * atan2(sqrt(a), sqrt(1 - a))
+        return r * c
+    }
+
+    fun isWithinSearchRadius(locationGpsString: String, centerGpsString: String, radiusLimitKm: Float): Boolean {
+        return try {
+            val locParts = locationGpsString.split(",")
+            val cenParts = centerGpsString.split(",")
+            if (locParts.size < 2 || cenParts.size < 2) return true
+            
+            val lat1 = locParts[0].trim().toDoubleOrNull() ?: return true
+            val lon1 = locParts[1].trim().toDoubleOrNull() ?: return true
+            val lat2 = cenParts[0].trim().toDoubleOrNull() ?: return true
+            val lon2 = cenParts[1].trim().toDoubleOrNull() ?: return true
+
+            val dist = calculateDistanceKm(lat1, lon1, lat2, lon2)
+            dist <= radiusLimitKm
+        } catch (e: Exception) {
+            true // default fallback if string pattern mismatch
+        }
     }
 }

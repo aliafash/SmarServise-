@@ -2,358 +2,288 @@ package com.example.data
 
 import android.content.Context
 import android.os.Environment
-import android.util.Log
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
+import android.widget.Toast
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.firstOrNull
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.io.File
-import java.io.FileWriter
+import java.io.FileInputStream
+import java.io.FileOutputStream
 
 class AppRepository(private val appDao: AppDao, private val context: Context) {
 
-    // Simulated Firestore Snapshot Sync listener triggers
-    private val _syncStatus = MutableStateFlow("متزامن ومحمي محلياً 🟢")
-    val syncStatus: StateFlow<String> = _syncStatus
-
-    // Flows
     val categories: Flow<List<Category>> = appDao.getAllCategories()
-    val serviceProviders: Flow<List<ServiceProvider>> = appDao.getAllServiceProviders()
-    val pendingProviders: Flow<List<PendingProvider>> = appDao.getAllPendingProviders()
-    val reviews: Flow<List<Review>> = appDao.getAllReviews()
-    val chats: Flow<List<ChatMessage>> = appDao.getAllChats()
-    val reports: Flow<List<Report>> = appDao.getAllReports()
-    val loyaltyPoints: Flow<List<LoyaltyPoint>> = appDao.getAllLoyaltyPoints()
+    val activeProviders: Flow<List<ServiceProvider>> = appDao.getAllActiveProviders()
+    val allProvidersRaw: Flow<List<ServiceProvider>> = appDao.getAllProvidersRaw()
+    val pendingRegistrations: Flow<List<PendingRegistration>> = appDao.getPendingRegistrations()
     val appConfig: Flow<AppConfig?> = appDao.getAppConfigFlow()
-    val adBanners: Flow<List<AdBanner>> = appDao.getAllBanners()
+    val reports: Flow<List<Report>> = appDao.getAllReports()
+    val activeBanners: Flow<List<AdBanner>> = appDao.getAllActiveBanners()
+    val allBannersRaw: Flow<List<AdBanner>> = appDao.getAllBannersRaw()
+    val subscriptionRequests: Flow<List<SubscriptionRequest>> = appDao.getAllSubscriptionRequests()
+    val chatsFlow: Flow<List<ChatMessage>> = appDao.getAllChatsFlow()
+    val whitelistedDevices: Flow<List<WhitelistedDevice>> = appDao.getWhitelistedDevices()
+    val serviceTickets: Flow<List<ServiceRequestTicket>> = appDao.getServiceRequestsHistory()
+    val systemAlerts: Flow<List<SystemAlert>> = appDao.getSystemAlertsFlow()
 
-    init {
-        // Pre-seed database with default rich directory information
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                seedInitialData()
-            } catch (e: Exception) {
-                Log.e("Repository", "Error seeding INITIAL database", e)
-            }
-        }
-    }
+    // Seeds initial data if empty
+    suspend fun tryPrepopulateData() {
+        val existingConfig = appDao.getAppConfigDirect()
+        if (existingConfig == null) {
+            // 1. AppConfig
+            appDao.insertAppConfig(AppConfig())
 
-    private suspend fun triggerSyncChange(message: String) {
-        _syncStatus.value = "جاري مزامنة التغييرات 🔄..."
-        withContext(Dispatchers.IO) {
-            kotlinx.coroutines.delay(800) // Realistic server roundtrip delay
-        }
-        _syncStatus.value = "$message 🟢 (متزامن الآن)"
-    }
+            // 2. Categories
+            val seedCats = listOf(
+                Category("cat_home", "صيانة منزلية", "Home Maintenance", null, "🔧", 1),
+                Category("cat_health", "صحة ورعاية", "Health & Care", null, "🩺", 2),
+                Category("cat_edu", "تعليم وتدريب", "Education & Training", null, "📚", 3),
+                Category("cat_transfer", "نقل وخدمات", "Transport & Services", null, "🚚", 4),
 
-    // Config Methods
-    suspend fun getAppConfigDirect(): AppConfig {
-        return appDao.getAppConfigDirect() ?: AppConfig().also {
-            appDao.insertAppConfig(it)
-        }
-    }
+                // Subcategories
+                Category("sub_electro", "كهربائي منازل", "Electrician", "cat_home", "⚡", 5),
+                Category("sub_plumber", "سباك وصيانة أنابيب", "Plumber", "cat_home", "🚰", 6),
+                Category("sub_carpenter", "نجار ومصمم أثاث", "Carpenter", "cat_home", "🔨", 7),
+                Category("sub_ac", "فني تكييف وتبريد", "AC Technician", "cat_home", "❄️", 8),
 
-    suspend fun updateAppConfig(config: AppConfig) {
-        appDao.insertAppConfig(config)
-        triggerSyncChange("تم تحديث الإعدادات لجميع الأجهزة")
-    }
+                Category("sub_doc_general", "طبيب عام واستشارات", "General Doctor", "cat_health", "👨‍⚕️", 9),
+                Category("sub_nurse", "ممرض رعاية منزلية", "Home Care Nurse", "cat_health", "💉", 10),
 
-    // Categories Methods
-    suspend fun addCategory(category: Category) {
-        appDao.insertCategory(category)
-        triggerSyncChange("أضيف قسم جديد: ${category.nameAr}")
-    }
+                Category("sub_teacher_physics", "مدرس فيزياء ثانوي", "Physics Tutor", "cat_edu", "⚛️", 11),
+                Category("sub_teacher_math", "مدرس رياضيات وتحليل", "Math Tutor", "cat_edu", "📐", 12),
 
-    suspend fun deleteCategory(id: String) {
-        appDao.deleteCategoryById(id)
-        triggerSyncChange("حذف قسم ومزامنة البيانات")
-    }
-
-    // Providers Methods
-    suspend fun addServiceProvider(provider: ServiceProvider) {
-        appDao.insertServiceProvider(provider)
-        triggerSyncChange("تعديل/إضافة مقدم خدمة: ${provider.name}")
-    }
-
-    suspend fun deleteServiceProvider(id: String) {
-        appDao.deleteServiceProviderById(id)
-        triggerSyncChange("حذف مقدم الخدمة بنجاح")
-    }
-
-    // Pending Providers
-    suspend fun submitPendingProvider(pending: PendingProvider) {
-        appDao.insertPendingProvider(pending)
-        triggerSyncChange("تم رفع طلب الانضمام للمراجعة الفورية")
-    }
-
-    suspend fun approvePendingProvider(id: String) {
-        val pending = appDao.getPendingProviderById(id)
-        if (pending != null) {
-            val approvedProvider = ServiceProvider(
-                id = pending.id,
-                name = pending.name,
-                phone = pending.phone,
-                categoryId = pending.categoryId,
-                subCategoryId = pending.subCategoryId,
-                address = pending.address,
-                district = pending.district,
-                locationGPS = pending.locationGPS,
-                profileImage = pending.profileImage,
-                idCardImage = pending.idCardImage,
-                isApproved = true,
-                rating = 4.5f,
-                reviewCount = 1
+                Category("sub_water", "ويت ماء صهريج", "Water Truck", "cat_transfer", "💧", 13),
+                Category("sub_furniture", "نقل وتغليف عفش", "Furniture Moving", "cat_transfer", "📦", 14),
+                Category("sub_taxi", "سائق تكسي وتوصيل", "Taxi Delivery", "cat_transfer", "🚕", 15)
             )
-            appDao.insertServiceProvider(approvedProvider)
-            appDao.insertPendingProvider(pending.copy(status = "approved"))
-            triggerSyncChange("تم قبول المهني ${pending.name} ونشر حسابه")
+            for (c in seedCats) appDao.insertCategory(c)
+
+            // 3. Service Providers
+            val seedProviders = listOf(
+                ServiceProvider(
+                    id = "p1",
+                    name = "م. يوسف الصنعاني",
+                    phone = "777123456",
+                    categoryId = "cat_home",
+                    subCategoryId = "sub_electro",
+                    rating = 4.9f,
+                    address = "صنعاء",
+                    district = "السبعين",
+                    locationGPS = "15.3694,44.1910",
+                    profileImage = "https://images.unsplash.com/photo-1540569014015-19a7be504e3a?w=120&auto=format&fit=crop",
+                    isPinned = true,
+                    isRecommended = true,
+                    isVerified = true,
+                    hasPremiumBadge = true
+                ),
+                ServiceProvider(
+                    id = "p2",
+                    name = "د. عاصم عدنان",
+                    phone = "733221100",
+                    categoryId = "cat_health",
+                    subCategoryId = "sub_doc_general",
+                    rating = 4.8f,
+                    address = "عدن",
+                    district = "كريتر",
+                    locationGPS = "12.7855,45.0184",
+                    profileImage = "https://images.unsplash.com/photo-1622253692010-333f2da6031d?w=120&auto=format&fit=crop",
+                    isPinned = false,
+                    isRecommended = true,
+                    isVerified = true,
+                    hasPremiumBadge = false
+                ),
+                ServiceProvider(
+                    id = "p3",
+                    name = "الأستاذ خالد تعز",
+                    phone = "711554433",
+                    categoryId = "cat_edu",
+                    subCategoryId = "sub_teacher_math",
+                    rating = 4.6f,
+                    address = "تعز",
+                    district = "صالة",
+                    locationGPS = "13.5790,44.0200",
+                    profileImage = "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=120&auto=format&fit=crop",
+                    isPinned = false,
+                    isRecommended = false,
+                    isVerified = false,
+                    hasPremiumBadge = false
+                )
+            )
+            for (p in seedProviders) appDao.insertProvider(p)
+
+            // 4. Default Ad Banners
+            val seedBanners = listOf(
+                AdBanner(
+                    id = "ad_b1",
+                    imageUrl = "https://images.unsplash.com/photo-1621905251189-08b45d6a269e?w=600&auto=format&fit=crop",
+                    redirectUrl = "https://wa.me/967777123456",
+                    bannerText = "خصم 30% على خدمات التأسيس الكهربائي الشامل لشهر يونيو!",
+                    bannerType = "IMAGE",
+                    sizeType = "LARGE",
+                    durationSeconds = 6,
+                    isActive = true
+                ),
+                AdBanner(
+                    id = "ad_b2",
+                    imageUrl = "https://images.unsplash.com/photo-1517649763962-0c623066013b?w=600&auto=format&fit=crop",
+                    redirectUrl = "https://services-app.yemen",
+                    bannerText = "احصل الآن على اشتراك بريميوم لوضع كرتك في صدارة محركات البحث ومضاعفة مكالماتك اليومية!",
+                    bannerType = "TEXT",
+                    sizeType = "MEDIUM",
+                    durationSeconds = 5,
+                    isActive = true
+                )
+            )
+            for (b in seedBanners) appDao.insertBanner(b)
+
+            // 5. Default Whitelisted Device (This device sandbox)
+            appDao.insertWhitelistedDevice(WhitelistedDevice("sandbox_dev_id", "محاكاة جهاز المطور"))
         }
     }
 
-    suspend fun rejectPendingProvider(id: String, reason: String) {
-        val pending = appDao.getPendingProviderById(id)
-        if (pending != null) {
-            appDao.insertPendingProvider(pending.copy(status = "rejected", rejectionReason = reason))
-            triggerSyncChange("تم رفض وتجميد طلب الانضمام")
-        }
+    // Category CRUD
+    suspend fun addCategory(category: Category) = appDao.insertCategory(category)
+    suspend fun deleteCategory(id: String) = appDao.deleteCategoryById(id)
+
+    // Provider Action Management
+    suspend fun addProvider(provider: ServiceProvider) = appDao.insertProvider(provider)
+    suspend fun deleteProvider(id: String) = appDao.deleteProviderById(id)
+    suspend fun toggleVerification(id: String, isVerified: Boolean) = appDao.setProviderVerification(id, isVerified)
+    suspend fun togglePremium(id: String, isPremium: Boolean) = appDao.setProviderPremium(id, if (isPremium) 1 else 0)
+    suspend fun toggleBlacklist(id: String, isBanned: Boolean) = appDao.setProviderBlacklist(id, isBanned)
+
+    // Registration Flow
+    suspend fun submitProfessionalRegistration(pending: PendingRegistration) {
+        appDao.insertPendingRegistration(pending)
+        // Log Alert
+        appDao.insertSystemAlert(
+            SystemAlert(
+                id = "alert_reg_" + System.currentTimeMillis(),
+                title = "📌 طلب تسجيل كادر جديد",
+                message = "قدم المهني: ${pending.name} (${pending.address}) طلباً للانضمام إلى الدليل.",
+                type = "REGISTRATION"
+            )
+        )
     }
 
-    // Reviews Channels
-    suspend fun submitReview(review: Review) {
-        appDao.insertReview(review)
-        // Also refresh provider ratings
-        val prov = appDao.getServiceProviderById(review.providerId)
-        if (prov != null) {
-            val newReviewCount = prov.reviewCount + 1
-            val newRating = ((prov.rating * prov.reviewCount) + review.rating) / newReviewCount
-            appDao.insertServiceProvider(prov.copy(rating = newRating, reviewCount = newReviewCount))
-        }
-        triggerSyncChange("تم تسجيل التقييم بنجاح")
+    suspend fun approveRegistration(id: String, provider: ServiceProvider) {
+        appDao.insertProvider(provider)
+        appDao.deletePendingRegistrationById(id)
     }
 
-    // Reports Channels
+    suspend fun rejectRegistration(id: String) {
+        appDao.deletePendingRegistrationById(id)
+    }
+
+    // Reports CRUD
     suspend fun submitReport(report: Report) {
         appDao.insertReport(report)
-        triggerSyncChange("تم استلام البلاغ للمراجعة الأمنية")
-    }
-
-    suspend fun deleteReport(id: String) {
-        appDao.deleteReportById(id)
-        triggerSyncChange("تم تسوية البلاغ وحذفه")
-    }
-
-    // Banners Channels
-    suspend fun addBanner(banner: AdBanner) {
-        appDao.insertBanner(banner)
-        triggerSyncChange("أضيف إعلان ممول جديد")
-    }
-
-    suspend fun deleteBanner(id: String) {
-        appDao.deleteBannerById(id)
-        triggerSyncChange("تم حذف الإعلان الممول")
-    }
-
-    // Chats Channels
-    suspend fun sendChatMessage(msg: ChatMessage) {
-        appDao.insertChatMessage(msg)
-        triggerSyncChange("أرسلت رسالة فورية")
-    }
-
-    suspend fun clearOldChats(olderThan: Long) {
-        appDao.deleteOldChats(olderThan)
-        triggerSyncChange("تم تنظيف السجلات القديمة")
-    }
-
-    // Loyalty Points
-    suspend fun addLoyaltyPoints(userId: String, points: Int, reason: String) {
-        val uniqueId = "LP_" + System.currentTimeMillis()
-        appDao.insertLoyaltyPoint(LoyaltyPoint(uniqueId, userId, points, reason))
-        triggerSyncChange("تم منحك $points نقاط ولاء")
-    }
-
-    // Backup & Restore System Implementation
-    suspend fun backupDatabaseToStorage(): String = withContext(Dispatchers.IO) {
-        try {
-            val config = getAppConfigDirect()
-            val categoriesList = categories.firstOrNull() ?: emptyList()
-            val providersList = serviceProviders.firstOrNull() ?: emptyList()
-            val reportsList = reports.firstOrNull() ?: emptyList()
-
-            val backupDir = File(context.getExternalFilesDir(null), "backups")
-            if (!backupDir.exists()) backupDir.mkdirs()
-
-            val backupFile = File(backupDir, "services_backup_${System.currentTimeMillis()}.json")
-            val writer = FileWriter(backupFile)
-
-            // Simple structured manual JSON serialization
-            writer.write("{\n")
-            writer.write("  \"backup_time\": ${System.currentTimeMillis()},\n")
-            writer.write("  \"app_name\": \"${config.appName}\",\n")
-            writer.write("  \"categories_count\": ${categoriesList.size},\n")
-            writer.write("  \"providers_count\": ${providersList.size},\n")
-            writer.write("  \"reports_count\": ${reportsList.size}\n")
-            writer.write("}")
-            writer.flush()
-            writer.close()
-
-            updateAppConfig(config.copy(lastBackupTime = System.currentTimeMillis()))
-            return@withContext "الملف تم حفظه: ${backupFile.name}"
-        } catch (e: Exception) {
-            return@withContext "فشل النسخ الاحتياطي: ${e.localizedMessage}"
-        }
-    }
-
-    suspend fun exportReportsToCSV(): String = withContext(Dispatchers.IO) {
-        try {
-            val reportsList = reports.firstOrNull() ?: emptyList()
-            val file = File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "reports_export.csv")
-            val writer = FileWriter(file)
-            writer.write("ID,ProviderName,ReporterName,Reason,Timestamp,Status\n")
-            for (rep in reportsList) {
-                writer.write("${rep.id},\"${rep.providerName}\",\"${rep.reporterName}\",\"${rep.reason}\",${rep.timestamp},\"${rep.status}\"\n")
-            }
-            writer.flush()
-            writer.close()
-            return@withContext "حُفظ في مجلد التنزيلات: ${file.name}"
-        } catch (e: Exception) {
-            return@withContext "فشل التصدير: ${e.localizedMessage}"
-        }
-    }
-
-    // Seed Categories & Providers
-    private suspend fun seedInitialData() {
-        val currentCategories = categories.firstOrNull() ?: emptyList()
-        if (currentCategories.isNotEmpty()) return
-
-        // Insert Default Application Configuration
-        if (appDao.getAppConfigDirect() == null) {
-            appDao.insertAppConfig(AppConfig())
-        }
-
-        // Insert Standard Banners
-        appDao.insertBanner(AdBanner("banner1", "https://img.freepik.com/free-vector/home-repair-maintenance-service_1284-48292.jpg", "https://t.me/WAM2016", 30, "MEDIUM", "IMAGE"))
-        appDao.insertBanner(AdBanner("banner2", "https://img.freepik.com/free-vector/flat-medical-healthcare-services-pattern_23-2148151523.jpg", "https://t.me/WAM2016", 15, "MEDIUM", "IMAGE"))
-
-        // Add 4 Primary Categories
-        val parentCategories = listOf(
-            Category("cat_home", "صيانة منزلية", "Home Maintenance", null, "🔧", 1),
-            Category("cat_health", "صحة ورعاية", "Health & Care", null, "🩺", 2),
-            Category("cat_edu", "تعليم وتدريب", "Education & Training", null, "📚", 3),
-            Category("cat_transfer", "نقل وخدمات", "Transport & Services", null, "🚚", 4)
-        )
-
-        for (p in parentCategories) {
-            appDao.insertCategory(p)
-        }
-
-        // Sub categories for Home Maintenance
-        val homeSubs = listOf(
-            Category("sub_electro", "كهربائي منازل", "Residential Electrician", "cat_home", "⚡", 11),
-            Category("sub_plumber", "سباك وصيانة أنابيب", "Plumber & Piping", "cat_home", "🚰", 12),
-            Category("sub_carpenter", "نجار ومصمم أثاث", "Carpenter", "cat_home", "🔨", 13),
-            Category("sub_ac", "فني تكييف وتبريد", "AC Technician", "cat_home", "❄️", 14)
-        )
-        for (sub in homeSubs) appDao.insertCategory(sub)
-
-        // Sub categories for Health & Care
-        val healthSubs = listOf(
-            Category("sub_doc_general", "طبيب عام واستشارات", "General Practitioner", "cat_health", "👨‍⚕️", 21),
-            Category("sub_nurse", "ممرض رعاية منزلية", "Home Care Nurse", "cat_health", "💉", 22)
-        )
-        for (sub in healthSubs) appDao.insertCategory(sub)
-
-        // Sub categories for Education & Training
-        val eduSubs = listOf(
-            Category("sub_teacher_physics", "مدرس فيزياء ثانوي", "Physics Tutor", "cat_edu", "⚛️", 31),
-            Category("sub_teacher_math", "مدرس رياضيات وتحليل", "Math Tutor", "cat_edu", "📐", 32)
-        )
-        for (sub in eduSubs) appDao.insertCategory(sub)
-
-        // Sub categories for Transport & Services
-        val transSubs = listOf(
-            Category("sub_water", "ويت ماء صهريج", "Water Truck Delivery", "cat_transfer", "💧", 41),
-            Category("sub_furniture", "نقل وتغليف عفش", "Furniture Moving", "cat_transfer", "📦", 42),
-            Category("sub_taxi", "سائق تكسي وتوصيل", "Taxi Driver", "cat_transfer", "🚕", 43)
-        )
-        for (sub in transSubs) appDao.insertCategory(sub)
-
-        // Seed default service providers (solves previous " كهربائي " lock completely)
-        val defaultProviders = listOf(
-            ServiceProvider(
-                id = "prov1",
-                name = "ماهر محمد طاهر",
-                phone = "777644670",
-                categoryId = "cat_home",
-                subCategoryId = "sub_electro",
-                address = "شارع حدة - صنعاء",
-                district = "مديرية السبعين",
-                locationGPS = "15.3089,44.2056",
-                profileImage = "https://images.unsplash.com/photo-1540569014015-19a7be504e3a?w=400",
-                idCardImage = null,
-                isPinned = true,
-                isRecommended = true,
-                isVerified = true,
-                hasPremiumBadge = true,
-                rating = 4.9f,
-                reviewCount = 12
-            ),
-            ServiceProvider(
-                id = "prov2",
-                name = "أحمد يسلم الحضرمي",
-                phone = "711223344",
-                categoryId = "cat_home",
-                subCategoryId = "sub_plumber",
-                address = "المنصورة - عدن",
-                district = "المنصورة",
-                locationGPS = "12.8258,44.9892",
-                profileImage = "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400",
-                isPinned = false,
-                isRecommended = true,
-                isVerified = true,
-                rating = 4.8f,
-                reviewCount = 5
-            ),
-            ServiceProvider(
-                id = "prov3",
-                name = "د. ياسين محمود السامعي",
-                phone = "733445566",
-                categoryId = "cat_health",
-                subCategoryId = "sub_doc_general",
-                address = "شارع جمال - تعز",
-                district = "المظفر",
-                locationGPS = "13.5822,44.0156",
-                profileImage = "https://images.unsplash.com/photo-1622253692010-333f2da6031d?w=400",
-                isPinned = true,
-                isVerified = true,
-                rating = 5.0f,
-                reviewCount = 19
-            ),
-            ServiceProvider(
-                id = "prov4",
-                name = "أ. صفوان رياض عبده",
-                phone = "771122334",
-                categoryId = "cat_edu",
-                subCategoryId = "sub_teacher_physics",
-                address = "الدائري - صنعاء",
-                district = "مديرية معين",
-                locationGPS = "15.3522,44.1901",
-                profileImage = "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=400",
-                rating = 4.7f,
-                reviewCount = 8
+        // Log Alert
+        appDao.insertSystemAlert(
+            SystemAlert(
+                id = "alert_rep_" + System.currentTimeMillis(),
+                title = "🚨 بلاغ شكوى جديد",
+                message = "تم الإبلاغ عن مقدم الخدمة: ${report.providerName} بسبب: ${report.reason}.",
+                type = "REPORT"
             )
         )
+    }
+    suspend fun deleteReport(id: String) = appDao.deleteReportById(id)
 
-        for (prov in defaultProviders) {
-            appDao.insertServiceProvider(prov)
+    // Subscriptions CRUD
+    suspend fun submitSubscription(request: SubscriptionRequest) {
+        appDao.insertSubscriptionRequest(request)
+        // Log Alert
+        appDao.insertSystemAlert(
+            SystemAlert(
+                id = "alert_sub_" + System.currentTimeMillis(),
+                title = "📅 طلب اشتراك مميز شهري",
+                message = "طلب مقدم الخدمة: ${request.providerName} ترقية حسابه للشارة المميزة.",
+                type = "SUBSCRIPTION"
+            )
+        )
+    }
+    suspend fun deleteSubscription(id: String) = appDao.deleteSubscriptionRequestById(id)
+
+    // Ad Banners CRUD
+    suspend fun addBanner(banner: AdBanner) = appDao.insertBanner(banner)
+    suspend fun deleteBanner(id: String) = appDao.deleteBannerById(id)
+
+    // Config updating
+    suspend fun updateAppConfig(config: AppConfig) = appDao.insertAppConfig(config)
+
+    // Chats
+    suspend fun sendChatMessage(msg: ChatMessage) = appDao.insertChatMessage(msg)
+    suspend fun clearOldChats(olderThan: Long) = appDao.clearOldChats(olderThan)
+    suspend fun clearAllChats() = appDao.clearAllChats()
+
+    // System alerts alerts flow
+    suspend fun markAllAlertsAsRead() = appDao.markAllAlertsAsRead()
+    suspend fun clearSystemAlerts() = appDao.clearAllSystemAlerts()
+    suspend fun registerAlert(alert: SystemAlert) = appDao.insertSystemAlert(alert)
+
+    // Authorized device Whitelist
+    suspend fun addWhitelistedDevice(device: WhitelistedDevice) = appDao.insertWhitelistedDevice(device)
+    suspend fun deleteWhitelistedDevice(id: String) = appDao.deleteWhitelistedDeviceById(id)
+
+    // User historic tickets for User Dashboard
+    suspend fun addServiceRequestTicket(ticket: ServiceRequestTicket) = appDao.insertServiceRequestTicket(ticket)
+    suspend fun deleteServiceRequestTicket(id: String) = appDao.deleteServiceRequestTicketById(id)
+
+    // Database Backup Systems (Import / Export SQLite File)
+    fun exportDatabaseToStorage(folderChoice: String): File? {
+        try {
+            val dbFile = context.getDatabasePath("yemen_services_system_db")
+            if (!dbFile.exists()) return null
+
+            // Determine target directory
+            val targetDir = when (folderChoice) {
+                "SD" -> {
+                    // SD Card / External storage direction
+                    context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS) ?: context.filesDir
+                }
+                "INTERNAL" -> {
+                    // Internal memory folder
+                    context.filesDir
+                }
+                else -> {
+                    context.cacheDir
+                }
+            }
+
+            val safetyDir = File(targetDir, "Backups")
+            if (!safetyDir.exists()) safetyDir.mkdirs()
+
+            val targetFile = File(safetyDir, "yemen_services_backup_${System.currentTimeMillis()}.db")
+
+            FileInputStream(dbFile).use { input ->
+                FileOutputStream(targetFile).use { output ->
+                    input.copyTo(output)
+                }
+            }
+            return targetFile
+        } catch (e: Exception) {
+            e.printStackTrace()
+            return null
         }
+    }
 
-        // Seed some starter reviews
-        appDao.insertReview(Review("rev1", "prov1", 5, "عمل ممتاز وسرعة فائقة في المجيء وإصلاح العطل الكهربائي", "علي عبدالكريم", System.currentTimeMillis()))
-        appDao.insertReview(Review("rev2", "prov1", 4, "محترف جداً وملتزم بالمواعيد المحددة", "خالد الوصابي", System.currentTimeMillis() - 86450000))
-        appDao.insertReview(Review("rev3", "prov3", 5, "طبيب متميز وذو خلق رفيع ولديه خبرة طبية مبهرة", "أمجد السعدي", System.currentTimeMillis()))
+    fun restoreDatabaseFromBackup(backupFile: File): Boolean {
+        try {
+            val dbFile = context.getDatabasePath("yemen_services_system_db")
+            if (!backupFile.exists()) return false
+
+            // Close existing database instance before copying
+            AppDatabase.getDatabase(context).close()
+
+            FileInputStream(backupFile).use { input ->
+                FileOutputStream(dbFile).use { output ->
+                    input.copyTo(output)
+                }
+            }
+            return true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            return false
+        }
     }
 }
