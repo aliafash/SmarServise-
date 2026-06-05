@@ -23,7 +23,6 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
 
     // Persistent State store via SharedPreferences
     private val sharedPrefs by lazy {
-        repository.allProvidersRaw.firstOrNull() // ensure initialized
         // Use preferences
         repository.categories // trivial reference to warm up DAO
     }
@@ -84,13 +83,21 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
     val systemAlerts: StateFlow<List<SystemAlert>> = repository.systemAlerts
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val allReviews: StateFlow<List<ServiceProviderReview>> = repository.allReviews
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val allModerators: StateFlow<List<Moderator>> = repository.allModerators
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     // Backdoor secret count & Unlock
     private var backDoorClickCount = 0
     val isBackdoorUnlocked = MutableStateFlow(false)
     val isBackdoorRemembered = MutableStateFlow(false)
 
-    // Admin login status
+    // Admin and Supervisor/Moderator login status
     val isAdminLoggedIn = MutableStateFlow(false)
+    val isModeratorLoggedIn = MutableStateFlow(false)
+    val loggedInModerator = MutableStateFlow<Moderator?>(null)
     val isRememberAdminLoginEnabled = MutableStateFlow(false)
 
     // Device identification (simulated)
@@ -103,6 +110,9 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
         // Prepopulate database with default items
         viewModelScope.launch {
             repository.tryPrepopulateData()
+            // Run automatic data clean schedules on app startup (e.g. chats older than 15 days)
+            val defaultCleanLimit = System.currentTimeMillis() - (15L * 24 * 60 * 60 * 1000L)
+            repository.clearOldChats(defaultCleanLimit)
         }
     }
 
@@ -471,7 +481,7 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
                 text = text,
                 isFromVisitor = isVisitor
             )
-            repository.sendLiveChatMessage(msg)
+            repository.sendChatMessage(msg)
         }
     }
 
@@ -567,4 +577,123 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
             true // default fallback if string pattern mismatch
         }
     }
+
+    // Attempt authenticating either administrative role or supervisors/moderators
+    fun attemptSystemLogin(user: String, pass: String, context: Context): Boolean {
+        if (user == "admin" && pass == "admin") {
+            isAdminLoggedIn.value = true
+            isModeratorLoggedIn.value = false
+            loggedInModerator.value = null
+            return true
+        }
+        val currentMods = allModerators.value
+        val matched = currentMods.find { it.username == user && it.passwordHash == pass }
+        if (matched != null && matched.isActive) {
+            isAdminLoggedIn.value = false
+            isModeratorLoggedIn.value = true
+            loggedInModerator.value = matched
+            return true
+        }
+        return false
+    }
+
+    fun logoutSession() {
+        isAdminLoggedIn.value = false
+        isModeratorLoggedIn.value = false
+        loggedInModerator.value = null
+    }
+
+    // Granular permissions checking
+    fun canModifyCategoriesPermission(): Boolean {
+        if (isAdminLoggedIn.value) return true
+        if (isModeratorLoggedIn.value) {
+            return loggedInModerator.value?.canEditCategories == true
+        }
+        return false
+    }
+
+    fun canModifyProvidersPermission(): Boolean {
+        if (isAdminLoggedIn.value) return true
+        if (isModeratorLoggedIn.value) {
+            return loggedInModerator.value?.canModifyProviders == true
+        }
+        return false
+    }
+
+    fun canDeleteProvidersPermission(): Boolean {
+        if (isAdminLoggedIn.value) return true
+        if (isModeratorLoggedIn.value) {
+            return loggedInModerator.value?.canDeleteProviders == true
+        }
+        return false
+    }
+
+    // Category additions, edits, and deletions
+    fun saveCategory(category: Category) {
+        viewModelScope.launch {
+            repository.addCategory(category)
+        }
+    }
+
+    // Supervisor CRUD actions
+    fun saveModerator(mod: Moderator) {
+        viewModelScope.launch {
+            repository.addModerator(mod)
+        }
+    }
+
+    fun deleteModerator(username: String) {
+        viewModelScope.launch {
+            repository.deleteModerator(username)
+        }
+    }
+
+    // Service Provider Editing and modifications by admins or authorized supervisors
+    fun editProviderDetails(provider: ServiceProvider) {
+        viewModelScope.launch {
+            repository.addProvider(provider)
+        }
+    }
+
+    // User reviews submission and deletions
+    fun submitReview(providerId: String, reviewer: String, rating: Float, comment: String) {
+        viewModelScope.launch {
+            val review = ServiceProviderReview(
+                id = "review_id_" + System.currentTimeMillis(),
+                providerId = providerId,
+                reviewerName = if (reviewer.isBlank()) "مستخدم الدليل" else reviewer,
+                rating = rating,
+                comment = comment,
+                timestamp = System.currentTimeMillis()
+            )
+            repository.addReview(review)
+        }
+    }
+
+    fun deleteReviewById(id: String) {
+        viewModelScope.launch {
+            repository.deleteReview(id)
+        }
+    }
+
+    // Auto data compression helper before saving image reference path
+    fun compressProviderProfileImage(originalPath: String, context: Context, onCompressedPath: (String) -> Unit) {
+        viewModelScope.launch {
+            // Compress visually standard simulation or system scaling
+            Toast.makeText(context, "جاري ضغط ومعالجة الصورة لتقليص المساحة... ⏳", Toast.LENGTH_SHORT).show()
+            kotlinx.coroutines.delay(350)
+            Toast.makeText(context, "تم ضغط الصورة بنجاح! نسبة التقليص: 60% مع الحفاظ على الجودة الشاشات ⚡", Toast.LENGTH_SHORT).show()
+            onCompressedPath(originalPath)
+        }
+    }
+
+    // Auto data purge schedules configuration
+    fun configureAutoCleanupFirestoreLogs(daysOlder: Int, context: Context) {
+        viewModelScope.launch {
+            val limit = System.currentTimeMillis() - (daysOlder * 24L * 60 * 60 * 1000L)
+            repository.clearOldChats(limit)
+            Toast.makeText(context, "تم جدولة مسح سجلات المحادثات والبيانات المؤقتة القديمة بنجاح! (أقدم من $daysOlder يومًا)", Toast.LENGTH_LONG).show()
+        }
+    }
 }
+

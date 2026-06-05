@@ -170,3 +170,25 @@ data class SystemAlert(
     val timestamp: Long = System.currentTimeMillis(),
     val isRead: Boolean = false
 )
+
+@Entity(tableName = "provider_reviews")
+@Serializable
+data class ServiceProviderReview(
+    @PrimaryKey val id: String,
+    val providerId: String,
+    val reviewerName: String,
+    val rating: Float, // 1.0 to 5.0
+    val comment: String,
+    val timestamp: Long = System.currentTimeMillis()
+)
+
+@Entity(tableName = "moderators")
+@Serializable
+data class Moderator(
+    @PrimaryKey val username: String, // acts as unique login key
+    val passwordHash: String,
+    val canEditCategories: Boolean = true,
+    val canDeleteProviders: Boolean = true,
+    val canModifyProviders: Boolean = true,
+    val isActive: Boolean = true
+)

@@ -3,6 +3,7 @@ package com.example
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import com.example.data.AppDatabase
@@ -15,7 +16,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         // Force edge-to-edge layout styling
-        androidx.activity.enableEdgeToEdge()
+        enableEdgeToEdge()
 
         val database = AppDatabase.getDatabase(applicationContext)
         val repository = AppRepository(database.appDao(), applicationContext)

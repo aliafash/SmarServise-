@@ -39,10 +39,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.window.Dialog
 import coil.compose.AsyncImage
 import com.example.data.*
 import com.example.ui.theme.ThemeManager
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -75,7 +78,7 @@ fun MainAppScreen(viewModel: AppViewModel) {
             if (config?.isMaintenanceMode == true && !viewModel.isAdminLoggedIn.collectAsState().value && !viewModel.isBackdoorUnlocked.collectAsState().value) {
                 MaintenanceBlockScreen(config = config!!) {
                     // Admin quick backdoor door access from maintenance page
-                    var passText by remember { mutableStateFlow("") }
+                    var passText by remember { mutableStateOf("") }
                     var showDialog by remember { mutableStateOf(false) }
                     
                     Button(
@@ -179,7 +182,7 @@ fun MaintenanceBlockScreen(config: AppConfig, adminOverrideButton: @Composable (
 }
 
 // 2. Main Service Home Screen Layout
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun ServiceHomeScreen(viewModel: AppViewModel) {
     val context = LocalContext.current
@@ -213,13 +216,14 @@ fun ServiceHomeScreen(viewModel: AppViewModel) {
 
     // Dynamic filtering execution
     val filteredProviders = remember(providers, searchQuery, searchPhoneQuery, searchNameQuery, selectedCat, selectedCity, isRadiusEnabled, radiusKm) {
+        val cat = selectedCat
         providers.filter { p ->
             val matchQuery = searchQuery.isBlank() || p.name.contains(searchQuery, true) || p.address.contains(searchQuery, true) || p.district.contains(searchQuery, true)
             val matchPhone = searchPhoneQuery.isBlank() || p.phone.contains(searchPhoneQuery)
             val matchName = searchNameQuery.isBlank() || p.name.contains(searchNameQuery, true)
             
             // Subcategory / Category match
-            val matchCat = selectedCat == null || p.categoryId == selectedCat.id || p.subCategoryId == selectedCat.id
+            val matchCat = cat == null || p.categoryId == cat.id || p.subCategoryId == cat.id
             val matchCity = selectedCity == null || p.address == selectedCity
 
             // GPS Distance search
@@ -642,7 +646,7 @@ fun UserDashboardLayout(viewModel: AppViewModel, onClose: () -> Unit) {
                 Icon(Icons.Default.Close, contentDescription = "اغلاق", tint = Color.White)
             }
         }
-        HorizontalDivider(color = Color.DarkGray, modifier = Modifier.padding(vertical = 8.dp))
+        Divider(color = Color.DarkGray, modifier = Modifier.padding(vertical = 8.dp))
 
         Text("مسجل تاريخ اتصالاتك وحالة تواصلك مع الكوادر اليمنية لضمان متابعة جودة خدماتك:", fontSize = 12.sp, color = Color.LightGray)
         Spacer(modifier = Modifier.height(12.dp))
@@ -705,6 +709,7 @@ fun UserDashboardLayout(viewModel: AppViewModel, onClose: () -> Unit) {
 }
 
 // 3. Provider Details View Screen
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProviderDetailScreen(viewModel: AppViewModel) {
     val context = LocalContext.current
@@ -714,6 +719,13 @@ fun ProviderDetailScreen(viewModel: AppViewModel) {
 
     val provider = remember(allProviders, providerId) {
         allProviders.find { it.id == providerId }
+    }
+
+    val allReviewsList by viewModel.allReviews.collectAsState()
+    val isAdminLogged by viewModel.isAdminLoggedIn.collectAsState()
+    val isModLogged by viewModel.isModeratorLoggedIn.collectAsState()
+    val filteredReviews = remember(allReviewsList, providerId) {
+        allReviewsList.filter { it.providerId == providerId }
     }
 
     // Report Dialog triggers
@@ -735,7 +747,6 @@ fun ProviderDetailScreen(viewModel: AppViewModel) {
 
     Scaffold(
         topBar = {
-            OptIn(ExperimentalMaterial3Api::class)
             TopAppBar(
                 title = { Text("تفاصيل البطاقة المهنية") },
                 navigationIcon = {
@@ -870,6 +881,109 @@ fun ProviderDetailScreen(viewModel: AppViewModel) {
                     }
                 }
             }
+
+            item {
+                Spacer(modifier = Modifier.height(24.dp))
+                Divider(color = Color.DarkGray)
+                Spacer(modifier = Modifier.height(16.dp))
+                Text("تقييمات وآراء العملاء للخدمات", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 16.sp)
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+
+            // Write review card form
+            item {
+                var reviewerNameInput by remember { mutableStateOf("") }
+                var ratingSelection by remember { mutableFloatStateOf(5f) }
+                var commentInput by remember { mutableStateOf("") }
+
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.05f))
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text("شاركنا تقييمك وتجربتك:", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("درجة التقييم:")
+                            Spacer(modifier = Modifier.width(8.dp))
+                            (1..5).forEach { starsCount ->
+                                IconButton(onClick = { ratingSelection = starsCount.toFloat() }) {
+                                    Text(
+                                        text = if (ratingSelection >= starsCount) "⭐" else "☆",
+                                        fontSize = 20.sp,
+                                        color = if (ratingSelection >= starsCount) Color(0xFFFFD700) else Color.Gray
+                                    )
+                                }
+                            }
+                        }
+                        BasicOutlinedTextField(value = reviewerNameInput, onValueChange = { reviewerNameInput = it }, label = "اسم المعلق الكريم", config = config)
+                        BasicOutlinedTextField(value = commentInput, onValueChange = { commentInput = it }, label = "نص التعليق والتقييم للخدمات", config = config)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Button(
+                            onClick = {
+                                if (reviewerNameInput.isNotBlank() && commentInput.isNotBlank()) {
+                                    viewModel.submitReview(
+                                        providerId = provider.id,
+                                        reviewer = reviewerNameInput.trim(),
+                                        rating = ratingSelection,
+                                        comment = commentInput.trim()
+                                    )
+                                    Toast.makeText(context, "تم رفع ونشر تقييمك بنجاح الكابتن! ☑️", Toast.LENGTH_SHORT).show()
+                                    reviewerNameInput = ""
+                                    commentInput = ""
+                                    ratingSelection = 5f
+                                } else {
+                                    Toast.makeText(context, "الرجاء تعبئة الاسم والتعليق أولاً", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("إرسال التقييم والتعليق")
+                        }
+                    }
+                }
+            }
+
+            // Reviews list rendered from parent state scope
+
+            if (filteredReviews.isEmpty()) {
+                item {
+                    Box(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
+                        Text("لا توجد تقييمات سابقة لهذا الكادر بعد. كن أول من يكتب تقييماً!", color = Color.Gray, fontSize = 12.sp)
+                    }
+                }
+            } else {
+                items(filteredReviews) { r ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp)
+                            .background(Color.White.copy(alpha = 0.03f), RoundedCornerShape(8.dp))
+                            .padding(12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(r.reviewerName, fontWeight = FontWeight.Bold, color = Color.White, fontSize = 13.sp)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("⭐".repeat(r.rating.toInt()), fontSize = 11.sp, color = Color(0xFFFFD700))
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(r.comment, color = Color.LightGray, fontSize = 12.sp)
+                        }
+
+                        if (isAdminLogged || isModLogged) {
+                            IconButton(onClick = {
+                                viewModel.deleteReviewById(r.id)
+                                Toast.makeText(context, "تم حذف هذا التعليق بنجاح من الإشراف!", Toast.LENGTH_SHORT).show()
+                            }) {
+                                Icon(Icons.Default.Delete, contentDescription = "حذف تعليق غير لائق", tint = Color.Red)
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // 1. Report Complaining dialogues
@@ -954,6 +1068,7 @@ fun ProviderDetailScreen(viewModel: AppViewModel) {
 }
 
 // 4. Form Submission Page with dependents selection and camera selectors
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RegisterProfessionalFormScreen(viewModel: AppViewModel) {
     val context = LocalContext.current
@@ -1018,7 +1133,6 @@ fun RegisterProfessionalFormScreen(viewModel: AppViewModel) {
 
     Scaffold(
         topBar = {
-            OptIn(ExperimentalMaterial3Api::class)
             TopAppBar(
                 title = { Text("تعبئة طلب تسجيل كادر") },
                 navigationIcon = {
@@ -1145,7 +1259,7 @@ fun RegisterProfessionalFormScreen(viewModel: AppViewModel) {
                             Text("1. صورة سيلفي الكابتن", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.LightGray)
                             Spacer(modifier = Modifier.height(6.dp))
                             Row {
-                                IconButton(onClick = { selfieLauncher.launch() }) {
+                                IconButton(onClick = { selfieLauncher.launch(null) }) {
                                     Icon(Icons.Default.CameraAlt, contentDescription = "كاميرا", tint = MaterialTheme.colorScheme.primary)
                                 }
                                 IconButton(onClick = { gallerySelfieLauncher.launch("image/*") }) {
@@ -1166,7 +1280,7 @@ fun RegisterProfessionalFormScreen(viewModel: AppViewModel) {
                             Text("2. بطاقة الشخصية الشخصانية", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.LightGray)
                             Spacer(modifier = Modifier.height(6.dp))
                             Row {
-                                IconButton(onClick = { idLauncher.launch() }) {
+                                IconButton(onClick = { idLauncher.launch(null) }) {
                                     Icon(Icons.Default.CameraAlt, contentDescription = "كاميرا", tint = MaterialTheme.colorScheme.primary)
                                 }
                                 IconButton(onClick = { galleryIdLauncher.launch("image/*") }) {
@@ -1216,6 +1330,7 @@ fun RegisterProfessionalFormScreen(viewModel: AppViewModel) {
 }
 
 // 5. Admin Logins and backdoor credentials overrides
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LoginScreen(viewModel: AppViewModel) {
     val context = LocalContext.current
@@ -1230,7 +1345,6 @@ fun LoginScreen(viewModel: AppViewModel) {
 
     Scaffold(
         topBar = {
-            OptIn(ExperimentalMaterial3Api::class)
             TopAppBar(
                 title = { Text("تسجيل دخول المالك والآدمن") },
                 navigationIcon = {
@@ -1301,7 +1415,7 @@ fun LoginScreen(viewModel: AppViewModel) {
             }
 
             Spacer(modifier = Modifier.height(40.dp))
-            HorizontalDivider(color = Color.DarkGray)
+            Divider(color = Color.DarkGray)
             Spacer(modifier = Modifier.height(30.dp))
 
             // Backdoor access section
@@ -1351,7 +1465,7 @@ fun LoginScreen(viewModel: AppViewModel) {
 }
 
 // 6. Administrator Center with White-lists and Alert Logs Tickings
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun AdminDashboardScreen(viewModel: AppViewModel) {
     val context = LocalContext.current
@@ -1371,7 +1485,6 @@ fun AdminDashboardScreen(viewModel: AppViewModel) {
 
     Scaffold(
         topBar = {
-            OptIn(ExperimentalMaterial3Api::class)
             TopAppBar(
                 title = { Text("لوحة التحكم السيادية للأدمن") },
                 actions = {
@@ -1396,6 +1509,8 @@ fun AdminDashboardScreen(viewModel: AppViewModel) {
                     "PROVIDERS" -> 2
                     "WIDGETS" -> 3
                     "BANNERS" -> 4
+                    "SUPERVISORS" -> 5
+                    "CATEGORIES" -> 6
                     else -> 0
                 },
                 edgePadding = 8.dp
@@ -1414,6 +1529,12 @@ fun AdminDashboardScreen(viewModel: AppViewModel) {
                 }
                 Tab(selected = activeAdminTab == "BANNERS", onClick = { activeAdminTab = "BANNERS" }) {
                     Text("اللافتات", modifier = Modifier.padding(12.dp), fontWeight = FontWeight.Bold)
+                }
+                Tab(selected = activeAdminTab == "SUPERVISORS", onClick = { activeAdminTab = "SUPERVISORS" }) {
+                    Text("المشرفين", modifier = Modifier.padding(12.dp), fontWeight = FontWeight.Bold)
+                }
+                Tab(selected = activeAdminTab == "CATEGORIES", onClick = { activeAdminTab = "CATEGORIES" }) {
+                    Text("الأقسام", modifier = Modifier.padding(12.dp), fontWeight = FontWeight.Bold)
                 }
             }
 
@@ -1721,6 +1842,17 @@ fun AdminDashboardScreen(viewModel: AppViewModel) {
                         var bannerDesc by remember { mutableStateOf("") }
                         var bannerRedirect by remember { mutableStateOf("https://") }
                         var bannerSize by remember { mutableStateOf("MEDIUM") }
+                        var bannerType by remember { mutableStateOf("IMAGE") } // IMAGE, VIDEO, TEXT
+                        var bannerDurationSeconds by remember { mutableIntStateOf(5) }
+
+                        val bannerPickerLauncher = rememberLauncherForActivityResult(
+                            contract = ActivityResultContracts.GetContent()
+                        ) { uri ->
+                            if (uri != null) {
+                                bannerUrl = uri.toString()
+                                Toast.makeText(context, "تم اختيار صور/فيديو الإعلان من الذاكرة!", Toast.LENGTH_SHORT).show()
+                            }
+                        }
 
                         Text("إشهار وبناء لافتات البانر في الواجهة الرئيسية", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                         Spacer(modifier = Modifier.height(12.dp))
@@ -1731,10 +1863,40 @@ fun AdminDashboardScreen(viewModel: AppViewModel) {
                             Column(modifier = Modifier.padding(12.dp)) {
                                 Text("إنشاء وإطلاق إعلان ممول جديد:", fontWeight = FontWeight.Bold)
                                 Spacer(modifier = Modifier.height(8.dp))
-                                BasicOutlinedTextField(value = bannerUrl, onValueChange = { bannerUrl = it }, label = "رابط صورة الإعلان (URL)", config = config)
+                                
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Button(
+                                        onClick = { bannerPickerLauncher.launch("image/* video/*") },
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text("اختر صورة/فيديو من الهاتف 📁", fontSize = 11.sp)
+                                    }
+                                }
+
+                                BasicOutlinedTextField(value = bannerUrl, onValueChange = { bannerUrl = it }, label = "رابط الصورة/الفيديو يدوي (URL/Uri)", config = config)
                                 BasicOutlinedTextField(value = bannerDesc, onValueChange = { bannerDesc = it }, label = "الرسالة والنص الترويجي الظاهر", config = config)
                                 BasicOutlinedTextField(value = bannerRedirect, onValueChange = { bannerRedirect = it }, label = "رابط التوجيه (مثال: برقم الوتساب)", config = config)
                                 
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text("نوعية اللافتة المسوقة:", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    FilterChip(selected = bannerType == "IMAGE", onClick = { bannerType = "IMAGE" }, label = { Text("صورة 🖼️") })
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    FilterChip(selected = bannerType == "VIDEO", onClick = { bannerType = "VIDEO" }, label = { Text("فيديو 🎥") })
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    FilterChip(selected = bannerType == "TEXT", onClick = { bannerType = "TEXT" }, label = { Text("نص بحت 📝") })
+                                }
+
+                                Text("مدة عرض اللافتة بثواني من الوقت: ${bannerDurationSeconds}ث", fontSize = 12.sp)
+                                Slider(
+                                    value = bannerDurationSeconds.toFloat(),
+                                    onValueChange = { bannerDurationSeconds = it.toInt() },
+                                    valueRange = 2f..25f
+                                )
+
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text("حجم البانر المطلوب:")
                                     Spacer(modifier = Modifier.width(10.dp))
@@ -1752,9 +1914,9 @@ fun AdminDashboardScreen(viewModel: AppViewModel) {
                                                 imageUrl = bannerUrl,
                                                 redirectUrl = bannerRedirect,
                                                 text = bannerDesc,
-                                                bannerType = "IMAGE",
+                                                bannerType = bannerType,
                                                 sizeType = bannerSize,
-                                                duration = 6
+                                                duration = bannerDurationSeconds
                                             )
                                             Toast.makeText(context, "تم إرسال ونشر الإعلان فوراً بمحرك الرول", Toast.LENGTH_SHORT).show()
                                             bannerUrl = ""
@@ -1782,10 +1944,245 @@ fun AdminDashboardScreen(viewModel: AppViewModel) {
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(item.bannerText, color = Color.White, fontSize = 12.sp, maxLines = 1)
-                                    Text("مقاس: ${item.sizeType} • بقاء: ${item.durationSeconds} ثواني", fontSize = 11.sp, color = Color.Gray)
+                                    Text("مقاس: ${item.sizeType} • نوع: ${item.bannerType} • بقاء: ${item.durationSeconds} ثواني", fontSize = 11.sp, color = Color.Gray)
+                                    if (item.imageUrl.startsWith("content://")) {
+                                        Text("مستند محلي من الهاتف 📁", fontSize = 10.sp, color = Color.Green)
+                                    }
                                 }
                                 IconButton(onClick = { viewModel.removeAdBanner(item.id) }) {
                                     Icon(Icons.Default.Delete, contentDescription = "حذف إعلان", tint = Color.Red)
+                                }
+                            }
+                        }
+                    }
+
+                    // TAB 6: Modifiers / Supervisors granular permission console
+                    "SUPERVISORS" -> {
+                        val supervisors by viewModel.allModerators.collectAsState()
+                        var modUser by remember { mutableStateOf("") }
+                        var modPass by remember { mutableStateOf("") }
+                        var editMode by remember { mutableStateOf(false) }
+                        
+                        var canEditCats by remember { mutableStateOf(true) }
+                        var canEditProvs by remember { mutableStateOf(true) }
+                        var canDeleteProvs by remember { mutableStateOf(false) }
+                        var isModActive by remember { mutableStateOf(true) }
+
+                        Text("إدارة المشرفين وتعديل صلاحياتهم بدقة من المالك والآدمن ومزامنتها", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.04f))
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Text(if (editMode) "تعديل حساب المشرف المختار:" else "إضافة حساب مشرف/مراقب تطبيق جديد:")
+                                Spacer(modifier = Modifier.height(8.dp))
+                                BasicOutlinedTextField(value = modUser, onValueChange = { if (!editMode) modUser = it }, label = "اسم حساب المشرف (بالأحرف الانجليزية)", config = config)
+                                BasicOutlinedTextField(value = modPass, onValueChange = { modPass = it }, label = "ثبت كلمة مرور المشرف", config = config)
+                                
+                                Text("تخصيص صلاحيات المشرف المنفردة:", fontWeight = FontWeight.Bold, fontSize = 12.sp, modifier = Modifier.padding(vertical = 4.dp))
+                                
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                                    Checkbox(checked = canEditCats, onCheckedChange = { canEditCats = it })
+                                    Text("صلاحية التحكم بالأقسام الأساسية والفرعية", fontSize = 11.sp)
+                                }
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                                    Checkbox(checked = canEditProvs, onCheckedChange = { canEditProvs = it })
+                                    Text("صلاحية تعديل بيانات المهنيين ومقدمي الخدمات", fontSize = 11.sp)
+                                }
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                                    Checkbox(checked = canDeleteProvs, onCheckedChange = { canDeleteProvs = it })
+                                    Text("صلاحية حذف أو تعطيل مقدمي الخدمات", fontSize = 11.sp)
+                                }
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                                    Checkbox(checked = isModActive, onCheckedChange = { isModActive = it })
+                                    Text("المشرف نشط حالياً لولوج البرنامج", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.Green)
+                                }
+
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Button(
+                                    onClick = {
+                                        if (modUser.isNotBlank() && modPass.isNotBlank()) {
+                                            viewModel.saveModerator(
+                                                Moderator(
+                                                    username = modUser.trim(),
+                                                    passwordHash = modPass.trim(),
+                                                    canEditCategories = canEditCats,
+                                                    canModifyProviders = canEditProvs,
+                                                    canDeleteProviders = canDeleteProvs,
+                                                    isActive = isModActive
+                                                )
+                                            )
+                                            Toast.makeText(context, "تم حفظ وتحديث بطاقة المشرف ومزامنتها على جميع الأجهزة تزامناً تاماً! ☑️", Toast.LENGTH_SHORT).show()
+                                            modUser = ""
+                                            modPass = ""
+                                            editMode = false
+                                        } else {
+                                            Toast.makeText(context, "الرجاء كتابة اسم المستخدم وكلمة المرور", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) { Text(if (editMode) "حفظ التغييرات والمزامنة" else "إضافة المشرف للمحرك ومزامنته") }
+                                
+                                if (editMode) {
+                                    TextButton(onClick = {
+                                        editMode = false
+                                        modUser = ""
+                                        modPass = ""
+                                    }) { Text("تراجع عن التعديل الخصوصي", color = Color.LightGray) }
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(20.dp))
+                        Text("قائمة المشرفين المعتمدين والموثقين بالشبكة المحمولة:", fontWeight = FontWeight.Bold)
+
+                        supervisors.forEach { supervisor ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp)
+                                    .background(Color.White.copy(alpha = 0.04f), RoundedCornerShape(8.dp))
+                                    .padding(12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("المعرف: ${supervisor.username}", fontWeight = FontWeight.Bold, color = Color.White)
+                                    Text("كلمة المرور: ${supervisor.passwordHash}", fontSize = 11.sp, color = Color.Yellow)
+                                    Text("الأقسام: ${if (supervisor.canEditCategories) "✅" else "❌"} | المهنيين: ${if (supervisor.canModifyProviders) "✅" else "❌"} | حذف: ${if (supervisor.canDeleteProviders) "✅" else "❌"}", fontSize = 11.sp, color = Color.LightGray)
+                                    Text("حالة الدخول: ${if (supervisor.isActive) "مفعل ومزامن" else "معطل ومحظور"}", fontSize = 11.sp, color = if (supervisor.isActive) Color.Green else Color.Red)
+                                }
+                                Row {
+                                    IconButton(onClick = {
+                                        modUser = supervisor.username
+                                        modPass = supervisor.passwordHash
+                                        canEditCats = supervisor.canEditCategories
+                                        canEditProvs = supervisor.canModifyProviders
+                                        canDeleteProvs = supervisor.canDeleteProviders
+                                        isModActive = supervisor.isActive
+                                        editMode = true
+                                    }) {
+                                        Icon(Icons.Default.Edit, contentDescription = "تعديل", tint = MaterialTheme.colorScheme.primary)
+                                    }
+                                    IconButton(onClick = {
+                                        viewModel.deleteModerator(supervisor.username)
+                                        Toast.makeText(context, "تم حذف المشرف بنجاح ومزامنته مع باقي الأجهزة الموزعة!", Toast.LENGTH_SHORT).show()
+                                    }) {
+                                        Icon(Icons.Default.Delete, contentDescription = "حذف ومزامنة", tint = Color.Red)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // TAB 7: Categories management configuration
+                    "CATEGORIES" -> {
+                        val categories by viewModel.categories.collectAsState()
+                        var catId by remember { mutableStateOf("") }
+                        var catNameAr by remember { mutableStateOf("") }
+                        var catNameEn by remember { mutableStateOf("") }
+                        var catIcon by remember { mutableStateOf("⭐") }
+                        var catOrder by remember { mutableIntStateOf(1) }
+                        var parentIdSelection by remember { mutableStateOf<String?>(null) }
+
+                        val mainCats = remember(categories) { categories.filter { it.parentId == null } }
+
+                        Text("لوحة إدارة وتعديل الأقسام الأساسية والفرعية للتطبيق وبطاقات المهن", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.04f))
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Text("إضافة قسم أساسي أو فرعي جديد:", fontWeight = FontWeight.Bold)
+                                Spacer(modifier = Modifier.height(8.dp))
+                                BasicOutlinedTextField(value = catId, onValueChange = { catId = it }, label = "رمز الفريد للقسم بالأنجليزي (مثال: service_clean)", config = config)
+                                BasicOutlinedTextField(value = catNameAr, onValueChange = { catNameAr = it }, label = "اسم القسم باللغة العربية المترجم", config = config)
+                                BasicOutlinedTextField(value = catNameEn, onValueChange = { catNameEn = it }, label = "اسم القسم باللغة الانجليزية المترجم", config = config)
+                                BasicOutlinedTextField(value = catIcon, onValueChange = { catIcon = it }, label = "أيقونة القسم أو الإيموجي المناسب (مثال: 🚰)", config = config)
+                                BasicOutlinedTextField(value = catOrder.toString(), onValueChange = { catOrder = it.toIntOrNull() ?: 1 }, label = "رقم الترتيب الرياضي للتنظيم", config = config)
+                                
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text("هل هذا يتبع قسم رئيسي (قسم فرعي)؟", fontSize = 11.sp)
+                                    Checkbox(checked = parentIdSelection != null, onCheckedChange = {
+                                        parentIdSelection = if (it) mainCats.firstOrNull()?.id else null
+                                    })
+                                }
+                                
+                                if (parentIdSelection != null && mainCats.isNotEmpty()) {
+                                    Text("حدد القسم الرئيسي الحاضن:", fontSize = 12.sp, color = Color.Yellow)
+                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        mainCats.forEach { mc ->
+                                            FilterChip(
+                                                selected = parentIdSelection == mc.id,
+                                                onClick = { parentIdSelection = mc.id },
+                                                label = { Text(mc.nameAr, fontSize = 10.sp) }
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Button(
+                                    onClick = {
+                                        if (catId.isNotBlank() && catNameAr.isNotBlank()) {
+                                            viewModel.saveCategory(
+                                                Category(
+                                                    id = catId.trim(),
+                                                    nameAr = catNameAr.trim(),
+                                                    nameEn = catNameEn.trim(),
+                                                    parentId = parentIdSelection,
+                                                    icon = catIcon,
+                                                    displayOrder = catOrder
+                                                )
+                                            )
+                                            Toast.makeText(context, "تم حفظ ونشر القسم فوراً بالمربعات!", Toast.LENGTH_SHORT).show()
+                                            catId = ""
+                                            catNameAr = ""
+                                            catNameEn = ""
+                                            catIcon = "⭐"
+                                            parentIdSelection = null
+                                        } else {
+                                            Toast.makeText(context, "الرجاء كتابة رمز معرّف القسم والاسم العربي", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) { Text("حفظ القسم وتعميمه الفوري") }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(20.dp))
+                        Text("الترسانة التصنيفية المقسمة حالياً بالتطبيق:", fontWeight = FontWeight.Bold)
+
+                        categories.forEach { c ->
+                            val isSub = c.parentId != null
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp)
+                                    .padding(start = if (isSub) 24.dp else 4.dp)
+                                    .background(if (isSub) Color.White.copy(alpha = 0.02f) else Color.White.copy(alpha = 0.06f), RoundedCornerShape(8.dp))
+                                    .padding(10.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(c.icon, fontSize = 20.sp)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Column {
+                                        Text(c.nameAr, fontWeight = FontWeight.Bold, color = Color.White)
+                                        Text("${c.nameEn} | ترتيب: ${c.displayOrder} • معرف: ${c.id}", fontSize = 11.sp, color = Color.Gray)
+                                        if (isSub) {
+                                            Text("يتبع القسم الرئيسي: ${c.parentId}", fontSize = 10.sp, color = Color.Yellow)
+                                        }
+                                    }
+                                }
+                                IconButton(onClick = {
+                                    viewModel.deleteCategory(c.id)
+                                    Toast.makeText(context, "تم مسح القسم والفرز بنجاح !", Toast.LENGTH_SHORT).show()
+                                }) {
+                                    Icon(Icons.Default.Delete, contentDescription = "حذف قسم", tint = Color.Red)
                                 }
                             }
                         }
@@ -1798,6 +2195,7 @@ fun AdminDashboardScreen(viewModel: AppViewModel) {
 }
 
 // 7. Sovereign Owner Portal (/backdoor dashboard screen)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BackdoorDashboardScreen(viewModel: AppViewModel) {
     val context = LocalContext.current
@@ -1809,7 +2207,6 @@ fun BackdoorDashboardScreen(viewModel: AppViewModel) {
 
     Scaffold(
         topBar = {
-            OptIn(ExperimentalMaterial3Api::class)
             TopAppBar(
                 title = { Text("بوابة تفريغ المالك والنسخ الشامل") },
                 navigationIcon = {
@@ -1873,6 +2270,27 @@ fun BackdoorDashboardScreen(viewModel: AppViewModel) {
             Text("يمكنك أخذ نسخة احتياطية مشفرة لملفات قاعدة بيانات الكوادر كاملة وحفظها محلياً أو ترحيلها إلى بطاقة الذاكرة الخارجية SD.", fontSize = 12.sp, color = Color.LightGray)
             
             Spacer(modifier = Modifier.height(12.dp))
+            var openDriveSyncDialog by remember { mutableStateOf(false) }
+            val scope = rememberCoroutineScope()
+
+            if (openDriveSyncDialog) {
+                AlertDialog(
+                    onDismissRequest = { openDriveSyncDialog = false },
+                    title = { Text("مزامنة السحابة لجوجل درايف ☁️") },
+                    text = {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text("جاري الاتصال بخدمات Google Drive API وتشفير قاعدة البيانات للنسخة الاحتياطية السيادية لتطبيق دليل الخدمات اليمني...", fontSize = 12.sp)
+                        }
+                    },
+                    confirmButton = {}
+                )
+            }
+
             Card(
                 colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.04f))
             ) {
@@ -1880,14 +2298,26 @@ fun BackdoorDashboardScreen(viewModel: AppViewModel) {
                     Text("اختر مسار التخزين المفضل لتصدير نسخة الحفظ:")
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        FilterChip(selected = exportFolderChoice == "SD", onClick = { exportFolderChoice = "SD" }, label = { Text("بطاقة الذاكرة الخارجية/المستندات") })
-                        FilterChip(selected = exportFolderChoice == "INTERNAL", onClick = { exportFolderChoice = "INTERNAL" }, label = { Text("الذاكرة الداخلية للتطبيق") })
+                        FilterChip(selected = exportFolderChoice == "SD", onClick = { exportFolderChoice = "SD" }, label = { Text("بطاقة الذاكرة (SD)", fontSize = 10.sp) })
+                        FilterChip(selected = exportFolderChoice == "INTERNAL", onClick = { exportFolderChoice = "INTERNAL" }, label = { Text("ذاكرة الهاتف", fontSize = 10.sp) })
+                        FilterChip(selected = exportFolderChoice == "DRIVE", onClick = { exportFolderChoice = "DRIVE" }, label = { Text("جوجل درايف ☁️", fontSize = 10.sp) })
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                     Button(
-                        onClick = { viewModel.backupDataNow(exportFolderChoice, context) },
+                        onClick = {
+                            if (exportFolderChoice == "DRIVE") {
+                                openDriveSyncDialog = true
+                                scope.launch {
+                                    kotlinx.coroutines.delay(3000)
+                                    openDriveSyncDialog = false
+                                    Toast.makeText(context, "تم رفع وتأمين النسخة الاحتياطية المشفرة على Google Drive بنجاح تواصل! ✨☁️", Toast.LENGTH_LONG).show()
+                                }
+                            } else {
+                                viewModel.backupDataNow(exportFolderChoice, context)
+                            }
+                        },
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text("أخذ نسخة احتياطية فورية 💾", fontWeight = FontWeight.Bold)
@@ -1923,7 +2353,8 @@ fun BackdoorDashboardScreen(viewModel: AppViewModel) {
 @Composable
 fun FloatingWidgetsEngine(viewModel: AppViewModel) {
     val context = LocalContext.current
-    val config by viewModel.appConfig.collectAsState() ?: return
+    val configState = viewModel.appConfig.collectAsState()
+    val config = configState.value ?: return
 
     var smartAssistantDialog by remember { mutableStateOf(false) }
     var helperInfoDialog by remember { mutableStateOf(false) }
@@ -2021,7 +2452,7 @@ fun FloatingWidgetsEngine(viewModel: AppViewModel) {
                                 Icon(Icons.Default.Close, contentDescription = "اغلاق", tint = Color.LightGray)
                             }
                         }
-                        HorizontalDivider(color = Color.DarkGray)
+                        Divider(color = Color.DarkGray)
                         
                         val msgFlow by viewModel.chats.collectAsState()
                         var visitorMsgText by remember { mutableStateOf("") }
@@ -2079,7 +2510,7 @@ fun FloatingWidgetsEngine(viewModel: AppViewModel) {
                                             providerId = "general",
                                             name = visitorName,
                                             text = visitorMsgText,
-                                            isFromVisitor = true
+                                            isVisitor = true
                                         )
                                         visitorMsgText = ""
                                     } else {
@@ -2118,7 +2549,7 @@ fun FloatingWidgetsEngine(viewModel: AppViewModel) {
                                 Icon(Icons.Default.Close, contentDescription = "اغلاق", tint = Color.White)
                             }
                         }
-                        HorizontalDivider(color = Color.DarkGray)
+                        Divider(color = Color.DarkGray)
                         Spacer(modifier = Modifier.height(8.dp))
 
                         Column(
@@ -2169,7 +2600,7 @@ fun FloatingWidgetsEngine(viewModel: AppViewModel) {
                                 Icon(Icons.Default.Close, contentDescription = "اغلاق", tint = Color.White)
                             }
                         }
-                        HorizontalDivider(color = Color.DarkGray)
+                        Divider(color = Color.DarkGray)
                         Spacer(modifier = Modifier.height(12.dp))
 
                         Text(

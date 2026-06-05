@@ -24,6 +24,8 @@ class AppRepository(private val appDao: AppDao, private val context: Context) {
     val whitelistedDevices: Flow<List<WhitelistedDevice>> = appDao.getWhitelistedDevices()
     val serviceTickets: Flow<List<ServiceRequestTicket>> = appDao.getServiceRequestsHistory()
     val systemAlerts: Flow<List<SystemAlert>> = appDao.getSystemAlertsFlow()
+    val allReviews: Flow<List<ServiceProviderReview>> = appDao.getAllReviews()
+    val allModerators: Flow<List<Moderator>> = appDao.getAllModerators()
 
     // Seeds initial data if empty
     suspend fun tryPrepopulateData() {
@@ -137,8 +139,31 @@ class AppRepository(private val appDao: AppDao, private val context: Context) {
 
             // 5. Default Whitelisted Device (This device sandbox)
             appDao.insertWhitelistedDevice(WhitelistedDevice("sandbox_dev_id", "محاكاة جهاز المطور"))
+
+            // 6. Default Moderators
+            val seedMods = listOf(
+                Moderator("mod1", "123456", canEditCategories = true, canDeleteProviders = false, canModifyProviders = true, isActive = true),
+                Moderator("mod_all", "777777", canEditCategories = true, canDeleteProviders = true, canModifyProviders = true, isActive = true)
+            )
+            for (m in seedMods) appDao.insertModerator(m)
+
+            // 7. Default Professional Reviews
+            val seedReviews = listOf(
+                ServiceProviderReview("rev_1", "p1", "ماجد أحمد", 5f, "ممتاز جداً وسريع في العمل وأنصح به!"),
+                ServiceProviderReview("rev_2", "p1", "سالم اليماني", 4.5f, "شغل نظيف ومرتب، تمنياتي له بالتوفيق."),
+                ServiceProviderReview("rev_3", "p2", "د. ريم", 5f, "تشخيص ممتاز وطبيب خلوق جداً")
+            )
+            for (r in seedReviews) appDao.insertReview(r)
         }
     }
+
+    // Reviews management helper
+    suspend fun addReview(review: ServiceProviderReview) = appDao.insertReview(review)
+    suspend fun deleteReview(id: String) = appDao.deleteReviewById(id)
+
+    // Moderators permissions editing helpers
+    suspend fun addModerator(mod: Moderator) = appDao.insertModerator(mod)
+    suspend fun deleteModerator(username: String) = appDao.deleteModeratorByUsername(username)
 
     // Category CRUD
     suspend fun addCategory(category: Category) = appDao.insertCategory(category)

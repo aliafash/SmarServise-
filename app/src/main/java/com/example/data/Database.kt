@@ -136,6 +136,26 @@ interface AppDao {
 
     @Query("DELETE FROM system_alerts")
     suspend fun clearAllSystemAlerts()
+
+    // Service Provider Reviews queries
+    @Query("SELECT * FROM provider_reviews ORDER BY timestamp DESC")
+    fun getAllReviews(): Flow<List<ServiceProviderReview>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertReview(review: ServiceProviderReview)
+
+    @Query("DELETE FROM provider_reviews WHERE id = :id")
+    suspend fun deleteReviewById(id: String)
+
+    // Moderators queries
+    @Query("SELECT * FROM moderators ORDER BY username ASC")
+    fun getAllModerators(): Flow<List<Moderator>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertModerator(mod: Moderator)
+
+    @Query("DELETE FROM moderators WHERE username = :username")
+    suspend fun deleteModeratorByUsername(username: String)
 }
 
 @Database(
@@ -150,9 +170,11 @@ interface AppDao {
         ChatMessage::class,
         WhitelistedDevice::class,
         ServiceRequestTicket::class,
-        SystemAlert::class
+        SystemAlert::class,
+        ServiceProviderReview::class,
+        Moderator::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
